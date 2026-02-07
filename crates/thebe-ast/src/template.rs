@@ -353,10 +353,11 @@ impl<'a> HtmlParser<'a> {
     if !self.remaining().starts_with('=') {
       // Could be a boolean attribute like `scoped` or a valueless directive.
       let span = Span::new(attr_start, self.abs_pos());
-      if let Some((kind, name)) = parse_directive_name(full_name) {
+      if let Some((kind, name, modifiers)) = parse_directive_name(full_name) {
         directives.push(Directive {
           kind,
           name,
+          modifiers,
           value: String::new(),
           span,
         });
@@ -396,10 +397,11 @@ impl<'a> HtmlParser<'a> {
     let attr_end = self.abs_pos();
     let span = Span::new(attr_start, attr_end);
 
-    if let Some((kind, name)) = parse_directive_name(full_name) {
+    if let Some((kind, name, modifiers)) = parse_directive_name(full_name) {
       directives.push(Directive {
         kind,
         name,
+        modifiers,
         value: val_str.to_string(),
         span,
       });
@@ -538,19 +540,23 @@ impl<'a> HtmlParser<'a> {
   }
 }
 
-/// Try to parse a directive name like `on:click` into `(DirectiveKind, arg)`.
+/// Try to parse a directive name like `on:click` or `on:click|preventDefault`
+/// into `(DirectiveKind, arg, modifiers)`.
 #[allow(clippy::manual_map)]
-fn parse_directive_name(name: &str) -> Option<(DirectiveKind, String)> {
-  if let Some(event) = name.strip_prefix("on:") {
-    Some((DirectiveKind::On, event.to_string()))
+fn parse_directive_name(name: &str) -> Option<(DirectiveKind, String, Vec<String>)> {
+  if let Some(rest) = name.strip_prefix("on:") {
+    let mut parts = rest.split('|');
+    let event = parts.next().unwrap_or_default().to_string();
+    let modifiers: Vec<String> = parts.map(String::from).collect();
+    Some((DirectiveKind::On, event, modifiers))
   } else if let Some(prop) = name.strip_prefix("bind:") {
-    Some((DirectiveKind::Bind, prop.to_string()))
+    Some((DirectiveKind::Bind, prop.to_string(), Vec::new()))
   } else if let Some(cls) = name.strip_prefix("class:") {
-    Some((DirectiveKind::Class, cls.to_string()))
+    Some((DirectiveKind::Class, cls.to_string(), Vec::new()))
   } else if let Some(prop) = name.strip_prefix("style:") {
-    Some((DirectiveKind::Style, prop.to_string()))
+    Some((DirectiveKind::Style, prop.to_string(), Vec::new()))
   } else if let Some(action) = name.strip_prefix("use:") {
-    Some((DirectiveKind::Use, action.to_string()))
+    Some((DirectiveKind::Use, action.to_string(), Vec::new()))
   } else {
     None
   }

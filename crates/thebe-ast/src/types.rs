@@ -203,6 +203,10 @@ pub struct Directive {
   pub kind: DirectiveKind,
   /// The directive argument (e.g. `"click"` in `on:click`).
   pub name: String,
+  /// Event modifiers (e.g. `["preventDefault", "stopPropagation"]`
+  /// from `on:click|preventDefault|stopPropagation`).
+  /// Always empty for non-`On` directives.
+  pub modifiers: Vec<String>,
   /// The directive value (e.g. `"increment"` in `on:click="increment"`).
   pub value: String,
   /// Byte-offset span of the entire directive.

@@ -1312,3 +1312,108 @@ fn slot_with_interpolation_fallback() {
   };
   assert_eq!(expr, "default_value");
 }
+
+// ---------------------------------------------------------------------------
+// Event modifiers (on:click|preventDefault|stopPropagation)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn single_event_modifier() {
+  let src = r#"<form on:submit|preventDefault="handle">ok</form>"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(el.directives.len(), 1);
+  let d = &el.directives[0];
+  assert_eq!(d.kind, DirectiveKind::On);
+  assert_eq!(d.name, "submit");
+  assert_eq!(d.modifiers, vec!["preventDefault"]);
+  assert_eq!(d.value, "handle");
+}
+
+#[test]
+fn multiple_event_modifiers() {
+  let src = r#"<button on:click|stopPropagation|preventDefault="go">x</button>"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  let d = &el.directives[0];
+  assert_eq!(d.kind, DirectiveKind::On);
+  assert_eq!(d.name, "click");
+  assert_eq!(d.modifiers, vec!["stopPropagation", "preventDefault"]);
+}
+
+#[test]
+fn event_without_modifiers_has_empty_vec() {
+  let src = r#"<button on:click="go">x</button>"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  let d = &el.directives[0];
+  assert_eq!(d.kind, DirectiveKind::On);
+  assert_eq!(d.name, "click");
+  assert!(d.modifiers.is_empty());
+}
+
+#[test]
+fn non_event_directive_has_no_modifiers() {
+  let src = r#"<input bind:value="x" />"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  let d = &el.directives[0];
+  assert_eq!(d.kind, DirectiveKind::Bind);
+  assert!(d.modifiers.is_empty());
+}
+
+#[test]
+fn modifier_on_self_closing_element() {
+  let src = r#"<input on:focus|once="handler" />"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  let d = &el.directives[0];
+  assert_eq!(d.name, "focus");
+  assert_eq!(d.modifiers, vec!["once"]);
+}
+
+#[test]
+fn modifier_with_no_value() {
+  let src = "<button on:click|preventDefault>x</button>";
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  let d = &el.directives[0];
+  assert_eq!(d.name, "click");
+  assert_eq!(d.modifiers, vec!["preventDefault"]);
+  assert!(d.value.is_empty());
+}
+
+#[test]
+fn modifier_span_covers_full_directive() {
+  let src = r#"<button on:click|prevent="go">x</button>"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  let d = &el.directives[0];
+  assert_eq!(&src[d.span.start..d.span.end], r#"on:click|prevent="go""#);
+}
+
+#[test]
+fn modifier_on_component() {
+  let src = r#"<Form on:submit|preventDefault="save">ok</Form>"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Component(el) = &nodes[0] else {
+    panic!("expected Component")
+  };
+  let d = &el.directives[0];
+  assert_eq!(d.name, "submit");
+  assert_eq!(d.modifiers, vec!["preventDefault"]);
+}
