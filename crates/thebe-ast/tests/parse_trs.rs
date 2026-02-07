@@ -1517,3 +1517,76 @@ fn slot_with_only_name_is_valid() {
   };
   assert_eq!(name.as_deref(), Some("header"));
 }
+
+// ── Closing tag whitespace tolerance ────────────────────────────────────
+
+#[test]
+fn closing_tag_with_trailing_space() {
+  let nodes = thebe_ast::parse_html("<div>hi</div >", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(el.tag, "div");
+  assert_eq!(el.children.len(), 1);
+}
+
+#[test]
+fn closing_tag_with_multiple_spaces() {
+  let nodes = thebe_ast::parse_html("<div>hi</div   >", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(el.tag, "div");
+}
+
+#[test]
+fn closing_tag_with_tab_before_bracket() {
+  let nodes = thebe_ast::parse_html("<div>hi</div\t>", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(el.tag, "div");
+}
+
+#[test]
+fn closing_tag_with_newline_before_bracket() {
+  let nodes = thebe_ast::parse_html("<div>hi</div\n>", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(el.tag, "div");
+}
+
+#[test]
+fn closing_tag_no_space_still_works() {
+  // Ensure the normal case isn't broken.
+  let nodes = thebe_ast::parse_html("<div>hello</div>", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(el.tag, "div");
+  assert_eq!(el.children.len(), 1);
+}
+
+#[test]
+fn nested_closing_tags_with_whitespace() {
+  let nodes = thebe_ast::parse_html("<ul><li>a</li ></ul >", 0).unwrap();
+  let HtmlNode::Element(ul) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(ul.tag, "ul");
+  let HtmlNode::Element(li) = &ul.children[0] else {
+    panic!("expected Element")
+  };
+  assert_eq!(li.tag, "li");
+}
+
+#[test]
+fn closing_tag_span_includes_whitespace() {
+  let nodes = thebe_ast::parse_html("<p>x</p  >", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  // The span should cover the whole element including the whitespace in the closing tag.
+  assert_eq!(el.span.end, 10);
+}

@@ -328,15 +328,25 @@ impl<'a> HtmlParser<'a> {
       // Parse children until closing tag.
       let children = self.parse_nodes(Some(&tag))?;
 
-      // Consume closing tag.
-      let close_tag = format!("</{tag}>");
-      if !self.remaining().starts_with(&close_tag) {
+      // Consume closing tag (allowing optional whitespace before `>`).
+      let close_prefix = format!("</{tag}");
+      let remaining = self.remaining();
+      if !remaining.starts_with(&close_prefix) {
         return Err(ParseError::MalformedTag {
           detail: format!("missing closing tag </{tag}>"),
           span: Span::new(elem_start, self.abs_pos()),
         });
       }
-      self.pos += close_tag.len();
+      self.pos += close_prefix.len();
+      self.skip_whitespace();
+      if self.remaining().starts_with('>') {
+        self.pos += 1;
+      } else {
+        return Err(ParseError::MalformedTag {
+          detail: format!("missing closing tag </{tag}>"),
+          span: Span::new(elem_start, self.abs_pos()),
+        });
+      }
 
       children
     };
