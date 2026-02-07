@@ -2,6 +2,7 @@ pub mod diagnostics;
 mod parser;
 mod template;
 mod types;
+pub mod visitor;
 
 pub use parser::parse;
 pub use template::parse_html;
