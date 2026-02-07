@@ -287,6 +287,11 @@ pub enum ParseError {
   /// The span points to the `{#each ...}` tag.
   #[error("invalid {{#each}} expression at byte {}: {detail}", span.start)]
   InvalidEachExpression { detail: String, span: Span },
+  /// A `<slot>` element has an unsupported attribute or directive.
+  /// Only the `name` attribute is allowed on `<slot>` elements.
+  /// The span points to the offending attribute or directive.
+  #[error("unsupported attribute on <slot> at byte {}: {detail}", span.start)]
+  InvalidSlotAttribute { detail: String, span: Span },
 }
 
 impl ParseError {
@@ -304,7 +309,8 @@ impl ParseError {
       | ParseError::MalformedTag { span, .. }
       | ParseError::UnclosedIfBlock { span }
       | ParseError::UnclosedEachBlock { span }
-      | ParseError::InvalidEachExpression { span, .. } => Some(*span),
+      | ParseError::InvalidEachExpression { span, .. }
+      | ParseError::InvalidSlotAttribute { span, .. } => Some(*span),
     }
   }
 }

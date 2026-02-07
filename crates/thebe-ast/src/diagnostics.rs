@@ -117,6 +117,13 @@ fn diag_info(error: &ParseError) -> DiagInfo {
         "expected {#each iterable as binding} or {#each iterable as binding, index}",
       ),
     },
+    ParseError::InvalidSlotAttribute { detail, span } => DiagInfo {
+      range: span.start..span.end,
+      message: "unsupported attribute on <slot>",
+      label: detail.clone(),
+      note: Some("only the 'name' attribute is allowed on <slot> elements"),
+      help: None,
+    },
   }
 }
 

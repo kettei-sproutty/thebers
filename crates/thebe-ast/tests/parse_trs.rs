@@ -1449,3 +1449,71 @@ fn modifier_on_component() {
   assert_eq!(d.name, "submit");
   assert_eq!(d.modifiers, vec!["preventDefault"]);
 }
+
+// ---------------------------------------------------------------------------
+// Slot attribute validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn slot_with_class_attribute_is_error() {
+  let result = thebe_ast::parse_html(r#"<slot class="x" />"#, 0);
+  assert!(matches!(
+    result,
+    Err(ParseError::InvalidSlotAttribute { .. })
+  ));
+}
+
+#[test]
+fn slot_with_directive_is_error() {
+  let result = thebe_ast::parse_html(r#"<slot on:click="go" />"#, 0);
+  assert!(matches!(
+    result,
+    Err(ParseError::InvalidSlotAttribute { .. })
+  ));
+}
+
+#[test]
+fn slot_with_bind_directive_is_error() {
+  let result = thebe_ast::parse_html(r#"<slot bind:value="x" />"#, 0);
+  assert!(matches!(
+    result,
+    Err(ParseError::InvalidSlotAttribute { .. })
+  ));
+}
+
+#[test]
+fn slot_with_name_and_extra_attr_is_error() {
+  let result = thebe_ast::parse_html(r#"<slot name="header" class="foo" />"#, 0);
+  assert!(matches!(
+    result,
+    Err(ParseError::InvalidSlotAttribute { .. })
+  ));
+}
+
+#[test]
+fn slot_error_span_points_to_offending_attr() {
+  let src = r#"<slot class="x" />"#;
+  let Err(ParseError::InvalidSlotAttribute { span, .. }) = thebe_ast::parse_html(src, 0) else {
+    panic!("expected InvalidSlotAttribute")
+  };
+  assert_eq!(&src[span.start..span.end], r#"class="x""#);
+}
+
+#[test]
+fn slot_error_span_points_to_directive() {
+  let src = r#"<slot on:click="go" />"#;
+  let Err(ParseError::InvalidSlotAttribute { span, .. }) = thebe_ast::parse_html(src, 0) else {
+    panic!("expected InvalidSlotAttribute")
+  };
+  assert_eq!(&src[span.start..span.end], r#"on:click="go""#);
+}
+
+#[test]
+fn slot_with_only_name_is_valid() {
+  // Sanity check: name-only slots still work.
+  let nodes = thebe_ast::parse_html(r#"<slot name="header" />"#, 0).unwrap();
+  let HtmlNode::Slot { name, .. } = &nodes[0] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(name.as_deref(), Some("header"));
+}

@@ -163,7 +163,7 @@ impl<'a> HtmlParser<'a> {
       if remaining.starts_with('<') && !remaining.starts_with("</") {
         let element = self.parse_element()?;
         if element.tag == "slot" {
-          nodes.push(Self::element_to_slot(element));
+          nodes.push(Self::element_to_slot(element)?);
         } else if element.tag.starts_with(char::is_uppercase) {
           nodes.push(HtmlNode::Component(element));
         } else {
@@ -231,8 +231,31 @@ impl<'a> HtmlParser<'a> {
 
   /// Convert a parsed `<slot>` [`Element`] into an [`HtmlNode::Slot`].
   ///
-  /// Extracts the `name` attribute (if any) and maps children/span.
-  fn element_to_slot(element: Element) -> HtmlNode {
+  /// Extracts the `name` attribute (if any) and rejects any other
+  /// attributes or directives with a parse error.
+  fn element_to_slot(element: Element) -> Result<HtmlNode, ParseError> {
+    // Reject directives (none are valid on <slot> yet).
+    if let Some(dir) = element.directives.first() {
+      return Err(ParseError::InvalidSlotAttribute {
+        detail: format!("directive '{}:{}' is not allowed on <slot>", match dir.kind {
+          DirectiveKind::On => "on",
+          DirectiveKind::Bind => "bind",
+          DirectiveKind::Class => "class",
+          DirectiveKind::Style => "style",
+          DirectiveKind::Use => "use",
+        }, dir.name),
+        span: dir.span,
+      });
+    }
+
+    // Reject attributes other than `name`.
+    if let Some(attr) = element.attributes.iter().find(|a| a.name != "name") {
+      return Err(ParseError::InvalidSlotAttribute {
+        detail: format!("attribute '{}' is not allowed on <slot>", attr.name),
+        span: attr.span,
+      });
+    }
+
     let name = element
       .attributes
       .iter()
@@ -244,11 +267,11 @@ impl<'a> HtmlParser<'a> {
         })
       });
 
-    HtmlNode::Slot {
+    Ok(HtmlNode::Slot {
       name,
       children: element.children,
       span: element.span,
-    }
+    })
   }
 
   /// Parse an opening tag, its children, and its closing tag.
