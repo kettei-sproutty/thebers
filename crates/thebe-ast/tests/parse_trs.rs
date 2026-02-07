@@ -203,6 +203,16 @@ fn script_in_template_is_error() {
   assert!(matches!(result, Err(ParseError::NestedScript { .. })));
 }
 
+#[test]
+fn nested_script_span_points_to_script_tag() {
+  let input = "<div>\n  <script>alert('xss')</script>\n</div>";
+  let Err(ParseError::NestedScript { span }) = thebe_ast::parse(input) else {
+    panic!("expected NestedScript error")
+  };
+  // Span should cover the opening <script> tag.
+  assert_eq!(&input[span.start..span.end], "<script>");
+}
+
 // --- Span tests ---
 
 #[test]

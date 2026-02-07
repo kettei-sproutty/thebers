@@ -76,10 +76,14 @@ pub fn parse(input: &str) -> Result<ThebeAst, ParseError> {
 
         // Text before the tag is a template fragment.
         let before = remaining[..tag_start].trim();
-        check_nested_script(kind, before, Span::new(abs_tag_start, abs_tag_start))?;
+        let open_tag = &remaining[tag_start..tag_end];
+        check_nested_script(
+          kind,
+          before,
+          Span::new(abs_tag_start, abs_tag_start + open_tag.len()),
+        )?;
         push_template_fragment(&mut ast.template, &remaining[..tag_start], offset)?;
 
-        let open_tag = &remaining[tag_start..tag_end];
         let close_tag = kind.close_tag();
         let after_open = &remaining[tag_end..];
 
@@ -225,9 +229,12 @@ fn push_template_fragment(
 ) -> Result<(), ParseError> {
   let trimmed = raw.trim();
   if !trimmed.is_empty() {
-    if contains_script_tag(trimmed) {
+    if let Some(script_offset) = find_script_tag(trimmed) {
+      let abs = base_offset + (raw.len() - raw.trim_start().len()) + script_offset;
+      let rest = &trimmed[script_offset..];
+      let tag_len = rest.find('>').map_or(rest.len(), |p| p + 1);
       return Err(ParseError::NestedScript {
-        span: Span::new(0, 0),
+        span: Span::new(abs, abs + tag_len),
       });
     }
     // Compute the byte offset of the trimmed content within the original input.
@@ -285,20 +292,19 @@ fn has_bool_attr(tag: &str, name: &str) -> bool {
   false
 }
 
-/// Check if text contains a top-level `<script` tag.
-fn contains_script_tag(text: &str) -> bool {
+/// Find the byte offset of a top-level `<script` tag within `text`,
+/// or `None` if no such tag exists.
+fn find_script_tag(text: &str) -> Option<usize> {
   let mut pos = 0;
   while pos < text.len() {
-    let Some(offset) = text[pos..].find("<script") else {
-      break;
-    };
+    let offset = text[pos..].find("<script")?;
     let abs = pos + offset;
     if is_tag_boundary(&text[abs + 1..], "script".len()) {
-      return true;
+      return Some(abs);
     }
     pos = abs + 1;
   }
-  false
+  None
 }
 
 /// Net HTML tag depth of a text fragment.
