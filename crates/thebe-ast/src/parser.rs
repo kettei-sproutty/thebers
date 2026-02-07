@@ -125,7 +125,7 @@ pub fn parse(input: &str) -> Result<ThebeAst, ParseError> {
           }
           BlockKind::Style => {
             ast.styles.push(StyleBlock {
-              scoped: open_tag.contains("scoped"),
+              scoped: has_bool_attr(open_tag, "scoped"),
               lang: extract_attr(open_tag, "lang"),
               content,
               span: block_span,
@@ -257,6 +257,32 @@ fn extract_attr(tag: &str, name: &str) -> Option<String> {
   let rest = &tag[start..];
   let end = rest.find('"')?;
   Some(rest[..end].to_string())
+}
+
+/// Check if a tag string contains a standalone boolean attribute.
+///
+/// The attribute must be preceded by whitespace and followed by
+/// whitespace, `>`, `/`, or end-of-string.  This prevents false
+/// positives like `data-scoped` or `unscoped` matching `scoped`.
+fn has_bool_attr(tag: &str, name: &str) -> bool {
+  let mut pos = 0;
+  while let Some(offset) = tag[pos..].find(name) {
+    let abs = pos + offset;
+    // Must be preceded by whitespace (not part of a longer word).
+    let before_ok = abs > 0
+      && tag[..abs]
+        .ends_with(|c: char| c.is_ascii_whitespace());
+    // Must be followed by boundary: whitespace, `>`, `/`, `=`, or end.
+    let after = abs + name.len();
+    let after_ok = after >= tag.len()
+      || tag[after..]
+        .starts_with(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/' || c == '=');
+    if before_ok && after_ok {
+      return true;
+    }
+    pos = abs + 1;
+  }
+  false
 }
 
 /// Check if text contains a top-level `<script` tag.

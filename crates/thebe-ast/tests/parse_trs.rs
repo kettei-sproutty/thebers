@@ -175,6 +175,28 @@ fn style_without_lang_has_none() {
 }
 
 #[test]
+fn scoped_attribute_must_be_standalone() {
+  // "data-scoped" should NOT trigger scoped=true
+  let input = r#"<style data-scoped="yes">body {}</style>"#;
+  let ast = thebe_ast::parse(input).unwrap();
+  assert!(!ast.styles[0].scoped);
+}
+
+#[test]
+fn unscoped_attribute_does_not_match_scoped() {
+  let input = "<style unscoped>body {}</style>";
+  let ast = thebe_ast::parse(input).unwrap();
+  assert!(!ast.styles[0].scoped);
+}
+
+#[test]
+fn genuine_scoped_attribute_is_detected() {
+  let input = "<style scoped>body {}</style>";
+  let ast = thebe_ast::parse(input).unwrap();
+  assert!(ast.styles[0].scoped);
+}
+
+#[test]
 fn script_in_template_is_error() {
   let input = fs::read_to_string("tests/samples/nested_script.trs").unwrap();
   let result = thebe_ast::parse(&input);
