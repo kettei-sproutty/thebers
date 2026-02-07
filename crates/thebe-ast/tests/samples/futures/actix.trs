@@ -1,0 +1,41 @@
+<script setup>
+// src/routes/profile/[user_id].trs
+use actix_web::web::Path;
+// Prelude automatically included in script setup
+
+#[thebe::data]
+struct Profile {
+    username: String,
+}
+
+#[actix::handler]
+pub async fn handler(Path(user_id): Path<u32>) -> Profile {
+    Profile {
+        username: format!("{}", user_id),
+    }
+}
+</script>
+
+<script lang="js">
+    const { username } = getProps();
+    
+    onMount(() => {
+        console.log("Component mounted with username:", username);
+    })
+</script>
+
+<div class="profile">
+    <p>Hello, {{ username }}!</p>
+</div>
+
+<style>
+    .profile {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        max-width: 300px;
+    }
+</style>

@@ -1,0 +1,11 @@
+[package]
+name = "thebe-ast"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ariadne = "0.6.0"
+thiserror = "2.0.18"

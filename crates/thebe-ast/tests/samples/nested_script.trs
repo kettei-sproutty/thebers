@@ -1,0 +1,3 @@
+<div>
+  <script>alert("xss")</script>
+</div>

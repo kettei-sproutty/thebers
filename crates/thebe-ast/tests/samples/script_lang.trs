@@ -1,0 +1,9 @@
+<script setup>
+let x: i32 = 42;
+</script>
+
+<script lang="ts">
+export default {};
+</script>
+
+<div>Hello</div>

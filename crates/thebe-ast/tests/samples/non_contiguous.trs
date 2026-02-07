@@ -1,0 +1,13 @@
+<p>First</p>
+
+<script setup>
+let x = 1;
+</script>
+
+<p>Second</p>
+
+<style>
+.red { color: red; }
+</style>
+
+<p>Third</p>

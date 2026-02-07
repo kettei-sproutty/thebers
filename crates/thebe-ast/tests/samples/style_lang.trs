@@ -1,0 +1,11 @@
+<style lang="scss">
+$color: red;
+.title { color: $color; }
+</style>
+
+<style scoped lang="less">
+@color: blue;
+.local { color: @color; }
+</style>
+
+<div>Hello</div>

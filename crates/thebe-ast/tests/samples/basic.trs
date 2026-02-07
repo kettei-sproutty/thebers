@@ -1,0 +1,17 @@
+<script setup>
+let x: i32 = 42;
+</script>
+
+<script lang="js">
+</script>
+
+<div>
+  <h1 class="title">Basic Test</h1>
+  <p>This is a basic test of the Thebe AST.</p>
+</div>
+
+<style>
+  .title {
+    color: red;
+  }
+</style>
