@@ -1,0 +1,54 @@
+<script setup>
+/// Initial state — this struct IS the app state.
+/// `#[thebe::data]` generates the reactive wrapper.
+#[thebe::data]
+struct Counter {
+    count: i32,
+    label: String,
+}
+
+impl Default for Counter {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            label: "Click me".to_string(),
+        }
+    }
+}
+</script>
+
+<script lang="rs">
+    // Reactivity handlers — these become methods on the generated app.
+    // `data` is a mutable reference to the Counter state.
+
+    fn increment(data: &mut Counter) {
+        data.count += 1;
+    }
+
+    fn decrement(data: &mut Counter) {
+        data.count -= 1;
+    }
+
+    fn reset(data: &mut Counter) {
+        data.count = 0;
+    }
+</script>
+
+<vstack>
+    <label>{{ label }}</label>
+    <label>Count: {{ count }}</label>
+    <hstack>
+        <button on:click="decrement">-</button>
+        <button on:click="reset">Reset</button>
+        <button on:click="increment">+</button>
+    </hstack>
+</vstack>
+
+<style>
+    label {
+        font-size: 24;
+    }
+    button {
+        padding: 8;
+    }
+</style>

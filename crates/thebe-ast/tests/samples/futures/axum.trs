@@ -1,0 +1,52 @@
+<script setup>
+use axum::extract::State;
+// Prelude automatically included in script setup
+
+#[thebe::data]
+struct Profile {
+    username: String,
+    profile_picture: String,
+}
+
+#[axum::handler]
+pub async fn handler(State(state): State<AppState>) -> Profile {
+    let db = state.db_pool.clone();
+    // Fetch user data from the database (mocked here)
+
+    Profile {
+        username: "thebe".to_string(),
+        profile_picture: "https://thebe.app/icon.svg".to_string(),
+    }
+}
+</script>
+
+<script lang="js">
+    const { username, profile_picture } = getProps();
+    
+    onMount(() => {
+        console.log("Component mounted with username:", username);
+    })
+</script>
+
+<div class="profile">
+    <img src="{{ profile_picture }}" alt="Profile Picture {{ username }}" class="profile-picture">
+    <p>Hello, {{ username }}!</p>
+</div>
+
+<style>
+    .profile {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        max-width: 300px;
+    }
+    
+    .profile-picture {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+    }
+</style>

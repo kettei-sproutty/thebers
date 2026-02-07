@@ -1,0 +1,9 @@
+<style>
+body { margin: 0; }
+</style>
+
+<div>Hello</div>
+
+<style scoped>
+.local { color: blue; }
+</style>
