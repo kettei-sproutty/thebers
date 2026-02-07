@@ -162,7 +162,9 @@ impl<'a> HtmlParser<'a> {
       // Check for opening tag.
       if remaining.starts_with('<') && !remaining.starts_with("</") {
         let element = self.parse_element()?;
-        if element.tag.starts_with(char::is_uppercase) {
+        if element.tag == "slot" {
+          nodes.push(Self::element_to_slot(element));
+        } else if element.tag.starts_with(char::is_uppercase) {
           nodes.push(HtmlNode::Component(element));
         } else {
           nodes.push(HtmlNode::Element(element));
@@ -225,6 +227,28 @@ impl<'a> HtmlParser<'a> {
       self.pos += remaining.chars().next().unwrap().len_utf8();
     }
     self.input[start..self.pos].to_string()
+  }
+
+  /// Convert a parsed `<slot>` [`Element`] into an [`HtmlNode::Slot`].
+  ///
+  /// Extracts the `name` attribute (if any) and maps children/span.
+  fn element_to_slot(element: Element) -> HtmlNode {
+    let name = element
+      .attributes
+      .iter()
+      .find(|a| a.name == "name")
+      .and_then(|a| {
+        a.value.first().and_then(|v| match v {
+          TemplateNode::Text(t) => Some(t.clone()),
+          TemplateNode::Expr { .. } => None,
+        })
+      });
+
+    HtmlNode::Slot {
+      name,
+      children: element.children,
+      span: element.span,
+    }
   }
 
   /// Parse an opening tag, its children, and its closing tag.

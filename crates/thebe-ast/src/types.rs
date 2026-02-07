@@ -135,6 +135,19 @@ pub enum HtmlNode {
   /// Structurally identical to [`Element`], but distinguished in the tree
   /// so downstream passes can resolve component definitions and props.
   Component(Element),
+  /// A `<slot>` element for component composition.
+  ///
+  /// Default slots have `name: None`; named slots carry the `name` attribute
+  /// value (e.g. `<slot name="header" />`). Children are fallback content
+  /// rendered when no slot content is provided by the parent.
+  Slot {
+    /// The slot name (`None` for the default slot).
+    name: Option<String>,
+    /// Fallback content rendered when the slot is not filled.
+    children: Vec<HtmlNode>,
+    /// Byte-offset span of the entire `<slot>...</slot>` or `<slot />`.
+    span: Span,
+  },
 }
 
 /// An HTML-like element in the template tree.

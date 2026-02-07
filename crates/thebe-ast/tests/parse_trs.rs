@@ -1175,3 +1175,140 @@ fn full_parse_with_component_in_template() {
   let tpl = &ast.template;
   assert!(!tpl.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Slot support (<slot> and <slot name="...">)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn default_slot() {
+  let nodes = thebe_ast::parse_html("<slot />", 0).unwrap();
+  assert_eq!(nodes.len(), 1);
+  let HtmlNode::Slot {
+    name, children, ..
+  } = &nodes[0]
+  else {
+    panic!("expected Slot, got {:?}", nodes[0])
+  };
+  assert_eq!(*name, None);
+  assert!(children.is_empty());
+}
+
+#[test]
+fn named_slot() {
+  let nodes = thebe_ast::parse_html(r#"<slot name="header" />"#, 0).unwrap();
+  let HtmlNode::Slot { name, .. } = &nodes[0] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(name.as_deref(), Some("header"));
+}
+
+#[test]
+fn slot_with_fallback_content() {
+  let nodes = thebe_ast::parse_html("<slot>default text</slot>", 0).unwrap();
+  let HtmlNode::Slot { children, name, .. } = &nodes[0] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(*name, None);
+  assert_eq!(children.len(), 1);
+  assert!(matches!(&children[0], HtmlNode::Text(t) if t == "default text"));
+}
+
+#[test]
+fn named_slot_with_fallback() {
+  let src = r#"<slot name="footer"><p>fallback</p></slot>"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Slot { name, children, .. } = &nodes[0] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(name.as_deref(), Some("footer"));
+  assert_eq!(children.len(), 1);
+  let HtmlNode::Element(p) = &children[0] else {
+    panic!("expected Element child")
+  };
+  assert_eq!(p.tag, "p");
+}
+
+#[test]
+fn slot_inside_component() {
+  let src = "<Card><slot /></Card>";
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Component(card) = &nodes[0] else {
+    panic!("expected Component")
+  };
+  assert_eq!(card.tag, "Card");
+  assert_eq!(card.children.len(), 1);
+  assert!(matches!(&card.children[0], HtmlNode::Slot { .. }));
+}
+
+#[test]
+fn slot_inside_element() {
+  let src = "<div><slot name=\"sidebar\" /></div>";
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Element(div) = &nodes[0] else {
+    panic!("expected Element")
+  };
+  let HtmlNode::Slot { name, .. } = &div.children[0] else {
+    panic!("expected Slot child")
+  };
+  assert_eq!(name.as_deref(), Some("sidebar"));
+}
+
+#[test]
+fn slot_inside_if_block() {
+  let src = r"{#if show}<slot />{/if}";
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::If { branches, .. } = &nodes[0] else {
+    panic!("expected If")
+  };
+  assert!(matches!(&branches[0].children[0], HtmlNode::Slot { .. }));
+}
+
+#[test]
+fn multiple_named_slots() {
+  let src = r#"<Layout><slot name="header" /><slot /><slot name="footer" /></Layout>"#;
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Component(layout) = &nodes[0] else {
+    panic!("expected Component")
+  };
+  assert_eq!(layout.children.len(), 3);
+
+  let HtmlNode::Slot { name: n0, .. } = &layout.children[0] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(n0.as_deref(), Some("header"));
+
+  let HtmlNode::Slot { name: n1, .. } = &layout.children[1] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(*n1, None);
+
+  let HtmlNode::Slot { name: n2, .. } = &layout.children[2] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(n2.as_deref(), Some("footer"));
+}
+
+#[test]
+fn slot_span_covers_full_tag() {
+  let src = "<slot />";
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Slot { span, .. } = &nodes[0] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(&src[span.start..span.end], src);
+}
+
+#[test]
+fn slot_with_interpolation_fallback() {
+  let src = "<slot>{{ default_value }}</slot>";
+  let nodes = thebe_ast::parse_html(src, 0).unwrap();
+  let HtmlNode::Slot { children, .. } = &nodes[0] else {
+    panic!("expected Slot")
+  };
+  assert_eq!(children.len(), 1);
+  let HtmlNode::Expr { expr, .. } = &children[0] else {
+    panic!("expected Expr child")
+  };
+  assert_eq!(expr, "default_value");
+}
