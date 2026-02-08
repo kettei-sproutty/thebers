@@ -182,6 +182,16 @@ impl Emitter {
 
     self.line("let mut __html = String::new();");
 
+    // Declare named slot variables so that `<slot name="X">` fallback
+    // logic compiles. These are initialised to `None` here; once full
+    // named-slot passing is wired up the caller will supply real values.
+    let named_slots = collect_named_slots(&c.template);
+    for name in &named_slots {
+      self.line(&format!(
+        "let __slot_{name}: Option<&str> = None;"
+      ));
+    }
+
     self.slotted = slotted;
     for node in &c.template {
       self.emit_node(node);
@@ -669,6 +679,46 @@ impl Emitter {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Recursively collect all distinct named-slot names from a template tree.
+///
+/// Returns a sorted, deduplicated list of slot names so that the codegen
+/// can emit `let __slot_NAME: Option<&str> = None;` declarations.
+fn collect_named_slots(nodes: &[IrNode]) -> Vec<String> {
+  let mut names = Vec::new();
+  collect_named_slots_inner(nodes, &mut names);
+  names.sort();
+  names.dedup();
+  names
+}
+
+fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {
+  for node in nodes {
+    match node {
+      IrNode::Slot(slot) => {
+        if let Some(name) = &slot.name {
+          out.push(name.clone());
+        }
+        collect_named_slots_inner(&slot.fallback, out);
+      }
+      IrNode::Element(el) => {
+        collect_named_slots_inner(&el.children, out);
+      }
+      IrNode::Component(comp) => {
+        collect_named_slots_inner(&comp.children, out);
+      }
+      IrNode::If(ib) => {
+        for branch in &ib.branches {
+          collect_named_slots_inner(&branch.children, out);
+        }
+      }
+      IrNode::Each(each) => {
+        collect_named_slots_inner(&each.children, out);
+      }
+      IrNode::Text(_) | IrNode::Expr(_) => {}
+    }
+  }
+}
 
 /// Map an [`EventModifier`] variant to its canonical string name.
 fn modifier_name(m: EventModifier) -> &'static str {

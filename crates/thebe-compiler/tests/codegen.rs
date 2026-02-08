@@ -438,14 +438,32 @@ fn component_with_children() {
 #[test]
 fn named_slot_with_fallback() {
   let code = codegen(r#"<slot name="header">default header</slot>"#);
-  assert!(code.contains("__slot_header"));
+  // Variable must be declared.
+  assert!(code.contains("let __slot_header: Option<&str> = None;"));
+  // Lookup and fallback.
+  assert!(code.contains("__slot_header.as_ref()"));
   assert!(code.contains(r#"__html.push_str("default header");"#));
 }
 
 #[test]
 fn named_slot_without_fallback() {
   let code = codegen(r#"<slot name="footer" />"#);
-  assert!(code.contains("__slot_footer"));
+  assert!(code.contains("let __slot_footer: Option<&str> = None;"));
+  assert!(code.contains("__slot_footer.as_ref()"));
+}
+
+#[test]
+fn named_slot_declaration_deduplicated() {
+  // Two slots with the same name should produce only one `let` declaration
+  // per render function (render + render_with_slot = 2 total).
+  let code = codegen(
+    r#"{#if show}<slot name="x">a</slot>{:else}<slot name="x">b</slot>{/if}"#,
+  );
+  assert_eq!(
+    code.matches("let __slot_x: Option<&str> = None;").count(),
+    2,
+    "expected exactly one declaration of __slot_x per render function"
+  );
 }
 
 // ── Scoped CSS rewriting ────────────────────────────────────────────────
