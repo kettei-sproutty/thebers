@@ -1590,3 +1590,80 @@ fn closing_tag_span_includes_whitespace() {
   // The span should cover the whole element including the whitespace in the closing tag.
   assert_eq!(el.span.end, 10);
 }
+
+// ── Tag / attribute name validation ────────────────────────────────
+
+#[test]
+fn rejects_tag_name_with_quote() {
+  let result = thebe_ast::parse_html(r#"<div"class></div"class>"#, 0);
+  assert!(matches!(result, Err(ParseError::MalformedTag { .. })));
+}
+
+#[test]
+fn rejects_tag_name_starting_with_digit() {
+  let result = thebe_ast::parse_html("<1div></1div>", 0);
+  assert!(matches!(result, Err(ParseError::MalformedTag { .. })));
+}
+
+#[test]
+fn rejects_tag_name_with_dot() {
+  let result = thebe_ast::parse_html("<div.foo></div.foo>", 0);
+  assert!(matches!(result, Err(ParseError::MalformedTag { .. })));
+}
+
+#[test]
+fn accepts_hyphenated_tag_name() {
+  let nodes = thebe_ast::parse_html("<my-component>hello</my-component>", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else { panic!("expected Element") };
+  assert_eq!(el.tag, "my-component");
+}
+
+#[test]
+fn accepts_pascal_case_component_tag() {
+  let nodes = thebe_ast::parse_html("<Header />", 0).unwrap();
+  let HtmlNode::Component(el) = &nodes[0] else { panic!("expected Component") };
+  assert_eq!(el.tag, "Header");
+}
+
+#[test]
+fn rejects_attr_name_with_quote() {
+  let result = thebe_ast::parse_html(r#"<div na"me="val">x</div>"#, 0);
+  assert!(matches!(result, Err(ParseError::MalformedTag { .. })));
+}
+
+#[test]
+fn rejects_attr_name_with_backslash() {
+  let result = thebe_ast::parse_html(r#"<div na\me="val">x</div>"#, 0);
+  assert!(matches!(result, Err(ParseError::MalformedTag { .. })));
+}
+
+#[test]
+fn accepts_data_attribute() {
+  let nodes = thebe_ast::parse_html(r#"<div data-foo="bar">x</div>"#, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else { panic!("expected Element") };
+  assert_eq!(el.attributes[0].name, "data-foo");
+}
+
+#[test]
+fn accepts_directive_with_modifiers() {
+  let nodes =
+    thebe_ast::parse_html(r#"<button on:click|prevent="handler">ok</button>"#, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else { panic!("expected Element") };
+  assert!(!el.directives.is_empty());
+  assert_eq!(el.directives[0].modifiers, vec!["prevent"]);
+}
+
+#[test]
+fn accepts_class_directive() {
+  let nodes =
+    thebe_ast::parse_html(r#"<div class:active="is_active">x</div>"#, 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else { panic!("expected Element") };
+  assert!(!el.directives.is_empty());
+  assert_eq!(el.directives[0].kind, DirectiveKind::Class);
+}
+
+#[test]
+fn rejects_tag_name_with_backslash() {
+  let result = thebe_ast::parse_html(r#"<div\>x</div\>"#, 0);
+  assert!(matches!(result, Err(ParseError::MalformedTag { .. })));
+}
