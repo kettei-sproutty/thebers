@@ -504,20 +504,15 @@ impl Emitter {
       ));
     } else {
       // Component with children (default slot content).
-      // First render the children into a slot string, then call render_with_slot.
+      // Render children into __comp_slot by temporarily redirecting __html.
       self.line("{");
       self.indent();
       self.line("let mut __comp_slot = String::new();");
-      // Temporarily swap __html → __comp_slot.
-      self.line("let mut __html_save = std::mem::take(&mut __html);");
       self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
       for child in &comp.children {
         self.emit_node(child);
       }
-      // Swap back.
       self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
-      self.line("std::mem::swap(&mut __html, &mut __html_save);");
-      self.line("__html.push_str(&__html_save);");
 
       if comp.props.is_empty() {
         self.line(&format!(
