@@ -4,13 +4,19 @@
 //! Rust module string with a `render()` function that returns HTML.
 
 use crate::ir::CompiledComponent;
+use crate::ir::IrAction;
 use crate::ir::IrAttribute;
+use crate::ir::IrBinding;
+use crate::ir::IrClassToggle;
 use crate::ir::IrComponentRef;
 use crate::ir::IrEach;
 use crate::ir::IrElement;
+use crate::ir::IrEventHandler;
 use crate::ir::IrIf;
 use crate::ir::IrNode;
 use crate::ir::IrSlot;
+use crate::ir::IrStyleProp;
+use crate::ir::EventModifier;
 
 use thebe_ast::TemplateNode;
 
@@ -212,9 +218,37 @@ impl Emitter {
     // Open tag name.
     self.line(&format!("__html.push_str(\"<{}\");", el.tag));
 
-    // Attributes.
+    // Static and dynamic attributes.
     for attr in &el.attributes {
       self.emit_attr(attr);
+    }
+
+    // Conditional CSS classes (class:name="condition").
+    if !el.class_toggles.is_empty() {
+      self.emit_class_toggles(&el.class_toggles);
+    }
+
+    // Inline style properties (style:prop="value").
+    if !el.style_props.is_empty() {
+      self.emit_style_props(&el.style_props);
+    }
+
+    // Event handlers (on:event="handler") — emitted as data attributes
+    // for client-side hydration.
+    for event in &el.events {
+      self.emit_event_handler(event);
+    }
+
+    // Two-way bindings (bind:prop="expr") — emitted as data attributes
+    // for client-side hydration.
+    for binding in &el.bindings {
+      self.emit_binding(binding);
+    }
+
+    // Action hooks (use:action="arg") — emitted as data attributes
+    // for client-side hydration.
+    for action in &el.actions {
+      self.emit_action(action);
     }
 
     // Scope attributes for scoped style isolation.
@@ -280,6 +314,116 @@ impl Emitter {
     }
   }
 
+  /// Emit conditional CSS class toggles as a single `class` attribute fragment.
+  ///
+  /// For `class:active="is_active"` and `class:hidden="!visible"`, generates:
+  /// ```text
+  /// {
+  ///   let mut __classes = Vec::new();
+  ///   if is_active { __classes.push("active"); }
+  ///   if !visible { __classes.push("hidden"); }
+  ///   if !__classes.is_empty() {
+  ///     __html.push_str(" class=\"");
+  ///     __html.push_str(&__classes.join(" "));
+  ///     __html.push_str("\"");
+  ///   }
+  /// }
+  /// ```
+  fn emit_class_toggles(&mut self, toggles: &[IrClassToggle]) {
+    self.line("{");
+    self.indent();
+    self.line("let mut __classes = Vec::new();");
+    for toggle in toggles {
+      self.line(&format!(
+        "if {} {{ __classes.push(\"{}\"); }}",
+        toggle.condition, toggle.class
+      ));
+    }
+    self.line("if !__classes.is_empty() {");
+    self.indent();
+    self.line("__html.push_str(\" class=\\\"\");");
+    self.line("__html.push_str(&__classes.join(\" \"));");
+    self.line("__html.push_str(\"\\\"\");");
+    self.dedent();
+    self.line("}");
+    self.dedent();
+    self.line("}");
+  }
+
+  /// Emit inline style properties as a single `style` attribute.
+  ///
+  /// For `style:color="text_color"` and `style:font-size="size"`, generates:
+  /// ```text
+  /// __html.push_str(" style=\"");
+  /// __html.push_str("color: ");
+  /// __html.push_str(&__esc(&format!("{}", { text_color })));
+  /// __html.push_str("; font-size: ");
+  /// __html.push_str(&__esc(&format!("{}", { size })));
+  /// __html.push_str("\"");
+  /// ```
+  fn emit_style_props(&mut self, props: &[IrStyleProp]) {
+    self.line("__html.push_str(\" style=\\\"\");");
+    for (i, prop) in props.iter().enumerate() {
+      if i > 0 {
+        self.line("__html.push_str(\"; \");");
+      }
+      self.line(&format!(
+        "__html.push_str(\"{}: \");",
+        esc_rs(&prop.property)
+      ));
+      self.line(&format!(
+        "__html.push_str(&__esc(&format!(\"{{}}\", {{ {} }})));",
+        prop.value
+      ));
+    }
+    self.line("__html.push_str(\"\\\"\");");
+  }
+
+  /// Emit an event handler as a `data-on-EVENT` attribute for client hydration.
+  ///
+  /// Event modifiers are encoded as a pipe-separated list in a companion
+  /// `data-on-EVENT-mod` attribute so the client runtime can apply them.
+  fn emit_event_handler(&mut self, event: &IrEventHandler) {
+    self.line(&format!(
+      "__html.push_str(\" data-on-{}=\\\"{}\\\"\");",
+      esc_rs(&event.event),
+      esc_rs(&event.handler),
+    ));
+    if !event.modifiers.is_empty() {
+      let mods: Vec<&str> = event.modifiers.iter().copied().map(modifier_name).collect();
+      self.line(&format!(
+        "__html.push_str(\" data-on-{}-mod=\\\"{}\\\"\");",
+        esc_rs(&event.event),
+        mods.join("|"),
+      ));
+    }
+  }
+
+  /// Emit a two-way binding as a `data-bind-PROP` attribute for client hydration.
+  fn emit_binding(&mut self, binding: &IrBinding) {
+    self.line(&format!(
+      "__html.push_str(\" data-bind-{}=\\\"{}\\\"\");",
+      esc_rs(&binding.property),
+      esc_rs(&binding.expression),
+    ));
+  }
+
+  /// Emit an action hook as a `data-use-NAME` attribute for client hydration.
+  fn emit_action(&mut self, action: &IrAction) {
+    if action.argument.is_empty() {
+      self.line(&format!(
+        "__html.push_str(\" data-use-{}\");",
+        esc_rs(&action.name),
+      ));
+    } else {
+      self.line(&format!(
+        "__html.push_str(\" data-use-{}=\\\"{}\\\"\");",
+        esc_rs(&action.name),
+        esc_rs(&action.argument),
+      ));
+    }
+  }
+
   fn emit_if(&mut self, ib: &IrIf) {
     for (i, branch) in ib.branches.iter().enumerate() {
       if i == 0 {
@@ -321,19 +465,129 @@ impl Emitter {
 
   fn emit_component(&mut self, comp: &IrComponentRef) {
     // SSR: call the component's render function and append its output.
-    // TODO: pass props and slot content once component resolution is in place.
-    self.line(&format!(
-      "__html.push_str(&{}::render());",
-      comp.name
-    ));
+    // Props are passed as keyword-style arguments. The component's render
+    // function signature is expected to accept them in declaration order.
+    if comp.props.is_empty() && comp.children.is_empty() {
+      self.line(&format!(
+        "__html.push_str(&{}::render());",
+        comp.name
+      ));
+    } else if comp.children.is_empty() {
+      // Pass props as arguments.
+      let args = Self::build_prop_args(&comp.props);
+      self.line(&format!(
+        "__html.push_str(&{}::render({args}));",
+        comp.name
+      ));
+    } else {
+      // Component with children (default slot content).
+      // First render the children into a slot string, then call render_with_slot.
+      self.line("{");
+      self.indent();
+      self.line("let mut __comp_slot = String::new();");
+      // Temporarily swap __html → __comp_slot.
+      self.line("let mut __html_save = std::mem::take(&mut __html);");
+      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+      for child in &comp.children {
+        self.emit_node(child);
+      }
+      // Swap back.
+      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+      self.line("std::mem::swap(&mut __html, &mut __html_save);");
+      self.line("__html.push_str(&__html_save);");
+
+      if comp.props.is_empty() {
+        self.line(&format!(
+          "__html.push_str(&{}::render_with_slot(&__comp_slot));",
+          comp.name
+        ));
+      } else {
+        let args = Self::build_prop_args(&comp.props);
+        self.line(&format!(
+          "__html.push_str(&{}::render_with_slot(&__comp_slot, {args}));",
+          comp.name
+        ));
+      }
+      self.dedent();
+      self.line("}");
+    }
+  }
+
+  /// Build a comma-separated argument string from component props.
+  ///
+  /// Each prop value is evaluated and converted to a string reference.
+  /// Static values are passed directly; dynamic expressions are formatted.
+  fn build_prop_args(props: &[IrAttribute]) -> String {
+    props
+      .iter()
+      .map(|p| {
+        if p.value.is_empty() {
+          // Boolean prop — pass `true`.
+          "true".to_string()
+        } else {
+          let all_static = p.value.iter().all(|v| matches!(v, TemplateNode::Text(_)));
+          if all_static {
+            let val: String = p
+              .value
+              .iter()
+              .map(|v| match v {
+                TemplateNode::Text(t) => t.as_str(),
+                TemplateNode::Expr { .. } => unreachable!(),
+              })
+              .collect();
+            format!("\"{}\"", esc_rs(&val))
+          } else if p.value.len() == 1 {
+            match &p.value[0] {
+              TemplateNode::Expr { expr, .. } => format!("&format!(\"{{}}\", {{ {expr} }})"),
+              TemplateNode::Text(t) => format!("\"{}\"", esc_rs(t)),
+            }
+          } else {
+            // Mixed static/dynamic — build with format!.
+            let mut fmt_str = String::new();
+            let mut fmt_args = Vec::new();
+            for part in &p.value {
+              match part {
+                TemplateNode::Text(t) => fmt_str.push_str(&esc_rs(t)),
+                TemplateNode::Expr { expr, .. } => {
+                  fmt_str.push_str("{}");
+                  fmt_args.push(expr.clone());
+                }
+              }
+            }
+            if fmt_args.is_empty() {
+              format!("\"{fmt_str}\"")
+            } else {
+              format!("&format!(\"{fmt_str}\", {})", fmt_args.join(", "))
+            }
+          }
+        }
+      })
+      .collect::<Vec<_>>()
+      .join(", ")
   }
 
   fn emit_slot(&mut self, slot: &IrSlot) {
-    if self.slotted {
-      // In slotted mode, inject the passed slot content.
+    if let Some(name) = &slot.name {
+      // Named slot: look up the slot variable `__slot_NAME`.
+      let var = format!("__slot_{name}");
+      self.line(&format!("if let Some(__named) = {var}.as_ref() {{"));
+      self.indent();
+      self.line("__html.push_str(__named);");
+      self.dedent();
+      if !slot.fallback.is_empty() {
+        self.line("} else {");
+        self.indent();
+        for child in &slot.fallback {
+          self.emit_node(child);
+        }
+        self.dedent();
+      }
+      self.line("}");
+    } else if self.slotted {
+      // Default slot in slotted mode: inject the passed slot content.
       self.line("__html.push_str(__slot);");
     } else {
-      // In standalone mode, render fallback content.
+      // Default slot in standalone mode: render fallback content.
       for child in &slot.fallback {
         self.emit_node(child);
       }
@@ -350,7 +604,17 @@ impl Emitter {
       self.line("pub const STYLES: &[&str] = &[");
       self.indent();
       for style in &c.styles {
-        self.line(&format!("\"{}\",", esc_rs(&style.content)));
+        if style.scoped {
+          if let Some(id) = &style.scope_id {
+            // Rewrite selectors to include the scope attribute.
+            let rewritten = rewrite_scoped_css(&style.content, id);
+            self.line(&format!("\"{}\",", esc_rs(&rewritten)));
+          } else {
+            self.line(&format!("\"{}\",", esc_rs(&style.content)));
+          }
+        } else {
+          self.line(&format!("\"{}\",", esc_rs(&style.content)));
+        }
       }
       self.dedent();
       self.line("];");
@@ -406,6 +670,20 @@ impl Emitter {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Map an [`EventModifier`] variant to its canonical string name.
+fn modifier_name(m: EventModifier) -> &'static str {
+  match m {
+    EventModifier::PreventDefault => "preventDefault",
+    EventModifier::StopPropagation => "stopPropagation",
+    EventModifier::Once => "once",
+    EventModifier::Capture => "capture",
+    EventModifier::Self_ => "self",
+    EventModifier::Trusted => "trusted",
+    EventModifier::Passive => "passive",
+    EventModifier::NonPassive => "nonpassive",
+  }
+}
+
 /// Escape a string for inclusion inside a Rust string literal.
 fn esc_rs(s: &str) -> String {
   s.replace('\\', "\\\\")
@@ -413,4 +691,233 @@ fn esc_rs(s: &str) -> String {
     .replace('\n', "\\n")
     .replace('\r', "\\r")
     .replace('\t', "\\t")
+}
+
+/// Rewrite CSS selectors to include a scoped attribute selector.
+///
+/// Appends `[data-SCOPE_ID]` to each selector so that styles only
+/// apply to elements rendered by this component (which carry the
+/// corresponding `data-s-XXXXXXXX` attribute).
+///
+/// This is a lightweight rewriter that handles common cases:
+/// - Simple selectors: `.card` → `.card[data-s-abcdef01]`
+/// - Compound selectors: `div.card` → `div.card[data-s-abcdef01]`
+/// - Combinators: `.card > p` → `.card[data-s-abcdef01] > p[data-s-abcdef01]`
+/// - Pseudo-elements: `.card::before` → `.card[data-s-abcdef01]::before`
+/// - Comma-separated: `.a, .b` → `.a[data-s-abcdef01], .b[data-s-abcdef01]`
+fn rewrite_scoped_css(css: &str, scope_id: &str) -> String {
+  let attr = format!("[data-{scope_id}]");
+  let mut result = String::with_capacity(css.len() * 2);
+  let mut chars = css.chars().peekable();
+
+  // Track whether we're inside a rule body `{ ... }`.
+  let mut brace_depth: usize = 0;
+  // Track whether we're inside a string/comment.
+  let mut in_comment = false;
+
+  while let Some(&c) = chars.peek() {
+    if in_comment {
+      result.push(c);
+      chars.next();
+      if c == '*' && chars.peek() == Some(&'/') {
+        result.push('/');
+        chars.next();
+        in_comment = false;
+      }
+      continue;
+    }
+
+    // Check for comment start.
+    if c == '/' && {
+      let mut peek = chars.clone();
+      peek.next();
+      peek.peek() == Some(&'*')
+    } {
+      result.push(c);
+      chars.next();
+      if let Some(&c2) = chars.peek() {
+        result.push(c2);
+        chars.next();
+      }
+      in_comment = true;
+      continue;
+    }
+
+    if c == '{' {
+      brace_depth += 1;
+      result.push(c);
+      chars.next();
+      continue;
+    }
+
+    if c == '}' {
+      brace_depth = brace_depth.saturating_sub(1);
+      result.push(c);
+      chars.next();
+      continue;
+    }
+
+    // Inside a rule body — pass through as-is.
+    if brace_depth > 0 {
+      result.push(c);
+      chars.next();
+      continue;
+    }
+
+    // We're in a selector context. Collect the full selector list up to `{`.
+    let mut selector_text = String::new();
+    while let Some(&sc) = chars.peek() {
+      if sc == '{' {
+        break;
+      }
+      selector_text.push(sc);
+      chars.next();
+    }
+
+    // Rewrite each comma-separated selector.
+    if !selector_text.trim().is_empty() {
+      let selectors: Vec<&str> = selector_text.split(',').collect();
+      for (i, sel) in selectors.iter().enumerate() {
+        if i > 0 {
+          result.push_str(", ");
+        }
+        let rewritten = scope_selector(sel.trim(), &attr);
+        result.push_str(&rewritten);
+      }
+    }
+  }
+
+  result
+}
+
+/// Scope a single CSS selector by appending the scope attribute selector
+/// to each simple selector in the compound/complex selector.
+///
+/// Handles:
+/// - Pseudo-elements: `.btn::before` → `.btn[data-s-X]::before`
+/// - Pseudo-classes: `.btn:hover` → `.btn[data-s-X]:hover`
+/// - Combinators: `.a > .b` → `.a[data-s-X] > .b[data-s-X]`
+fn scope_selector(selector: &str, attr: &str) -> String {
+  if selector.is_empty() {
+    return String::new();
+  }
+
+  // Split on combinators while preserving them.
+  let parts = split_on_combinators(selector);
+  let mut result = String::new();
+
+  for part in &parts {
+    let trimmed = part.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+
+    // Check if this part is a combinator.
+    if matches!(trimmed, ">" | "+" | "~") {
+      result.push(' ');
+      result.push_str(trimmed);
+      result.push(' ');
+      continue;
+    }
+
+    // Descendant combinator (space between parts) — add space if needed.
+    if !result.is_empty() && !result.ends_with(' ') {
+      result.push(' ');
+    }
+
+    // Find where to insert the scope attribute: before pseudo-elements
+    // and pseudo-classes.
+    if let Some(pseudo_pos) = find_pseudo_boundary(trimmed) {
+      result.push_str(&trimmed[..pseudo_pos]);
+      result.push_str(attr);
+      result.push_str(&trimmed[pseudo_pos..]);
+    } else {
+      result.push_str(trimmed);
+      result.push_str(attr);
+    }
+  }
+
+  result
+}
+
+/// Split a selector on CSS combinators (`>`, `+`, `~`, and whitespace).
+///
+/// Returns a list of parts where combinators are their own entries.
+fn split_on_combinators(selector: &str) -> Vec<String> {
+  let mut parts = Vec::new();
+  let mut current = String::new();
+  let mut chars = selector.chars().peekable();
+  // Track bracket depth for attribute selectors like `[data-x]`.
+  let mut bracket_depth: usize = 0;
+
+  while let Some(&c) = chars.peek() {
+    match c {
+      '[' => {
+        bracket_depth += 1;
+        current.push(c);
+        chars.next();
+      }
+      ']' => {
+        bracket_depth = bracket_depth.saturating_sub(1);
+        current.push(c);
+        chars.next();
+      }
+      '>' | '+' | '~' if bracket_depth == 0 => {
+        if !current.trim().is_empty() {
+          parts.push(current.clone());
+          current.clear();
+        }
+        parts.push(c.to_string());
+        chars.next();
+      }
+      ' ' | '\t' | '\n' if bracket_depth == 0 => {
+        // Could be a descendant combinator or just whitespace around
+        // another combinator. Consume all whitespace.
+        if !current.trim().is_empty() {
+          parts.push(current.clone());
+          current.clear();
+        }
+        while let Some(&ws) = chars.peek() {
+          if ws == ' ' || ws == '\t' || ws == '\n' {
+            chars.next();
+          } else {
+            break;
+          }
+        }
+      }
+      _ => {
+        current.push(c);
+        chars.next();
+      }
+    }
+  }
+
+  if !current.trim().is_empty() {
+    parts.push(current);
+  }
+
+  parts
+}
+
+/// Find the byte position where pseudo-elements (`::`) or pseudo-classes
+/// (`:`) begin in a simple selector, ignoring attribute selectors.
+fn find_pseudo_boundary(selector: &str) -> Option<usize> {
+  let mut i = 0;
+  let bytes = selector.as_bytes();
+  while i < bytes.len() {
+    match bytes[i] {
+      b'[' => {
+        // Skip attribute selector.
+        while i < bytes.len() && bytes[i] != b']' {
+          i += 1;
+        }
+        if i < bytes.len() {
+          i += 1; // skip ']'
+        }
+      }
+      b':' => return Some(i),
+      _ => i += 1,
+    }
+  }
+  None
 }
