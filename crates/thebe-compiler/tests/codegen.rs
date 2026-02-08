@@ -267,8 +267,9 @@ h1 { color: blue; }
   // Scoped style data attribute on elements.
   assert!(code.contains("data-s-"));
 
-  // Style constant.
-  assert!(code.contains("h1 { color: blue; }"));
+  // Scoped style constant — selectors are rewritten with scope attribute.
+  assert!(code.contains("h1[data-s-"));
+  assert!(code.contains("{ color: blue; }"));
 
   // Escape function present.
   assert!(code.contains("fn __esc("));
@@ -315,4 +316,328 @@ let upper = slug.to_uppercase();
   let code = codegen_with_params(source, &["slug"]);
   assert!(code.contains("pub fn render(slug: &str) -> String {"));
   assert!(code.contains("let upper = slug.to_uppercase();"));
+}
+
+// ── Event handlers (on:event) ───────────────────────────────────────────
+
+#[test]
+fn event_handler_emitted_as_data_attr() {
+  let code = codegen(r#"<button on:click="handleClick">Go</button>"#);
+  assert!(code.contains(r#"__html.push_str(" data-on-click=\"handleClick\"");"#));
+}
+
+#[test]
+fn event_handler_with_modifiers() {
+  let code = codegen(r#"<form on:submit|preventDefault="onSubmit">ok</form>"#);
+  assert!(code.contains(r#"data-on-submit=\"onSubmit\""#));
+  assert!(code.contains(r#"data-on-submit-mod=\"preventDefault\""#));
+}
+
+#[test]
+fn event_handler_multiple_modifiers() {
+  let code = codegen(r#"<button on:click|preventDefault|once="go">Go</button>"#);
+  assert!(code.contains(r#"data-on-click=\"go\""#));
+  assert!(code.contains(r#"data-on-click-mod=\"preventDefault|once\""#));
+}
+
+#[test]
+fn multiple_event_handlers() {
+  let code = codegen(r#"<div on:click="c" on:mouseover="m">x</div>"#);
+  assert!(code.contains(r#"data-on-click=\"c\""#));
+  assert!(code.contains(r#"data-on-mouseover=\"m\""#));
+}
+
+#[test]
+fn event_handler_html_escapes_special_chars() {
+  // A handler containing HTML-special characters must be escaped in the
+  // attribute value to prevent attribute injection / malformed HTML.
+  let code = codegen(r#"<button on:click="x&lt;y">Go</button>"#);
+  // & should become &amp; and < should become &lt; in the HTML output.
+  assert!(code.contains("&amp;"));
+  assert!(code.contains("&lt;"));
+}
+
+// ── Bindings (bind:prop) ────────────────────────────────────────────────
+
+#[test]
+fn binding_emitted_as_data_attr() {
+  let code = codegen(r#"<input bind:value="name" />"#);
+  assert!(code.contains(r#"data-bind-value=\"name\""#));
+}
+
+#[test]
+fn multiple_bindings() {
+  let code = codegen(r#"<input bind:value="text" bind:checked="on" />"#);
+  assert!(code.contains(r#"data-bind-value=\"text\""#));
+  assert!(code.contains(r#"data-bind-checked=\"on\""#));
+}
+
+// ── Class toggles (class:name) ──────────────────────────────────────────
+
+#[test]
+fn class_toggle_conditional() {
+  let code = codegen(r#"<div class:active="is_active">x</div>"#);
+  assert!(code.contains("if is_active { __classes.push(\"active\"); }"));
+  assert!(code.contains(r#"__html.push_str(" class=\"");"#));
+}
+
+#[test]
+fn multiple_class_toggles() {
+  let code = codegen(r#"<div class:active="a" class:hidden="b">x</div>"#);
+  assert!(code.contains("if a { __classes.push(\"active\"); }"));
+  assert!(code.contains("if b { __classes.push(\"hidden\"); }"));
+}
+
+// ── Style props (style:prop) ────────────────────────────────────────────
+
+#[test]
+fn style_prop_emitted() {
+  let code = codegen(r#"<div style:color="text_color">x</div>"#);
+  assert!(code.contains(r#"__html.push_str(" style=\"");"#));
+  assert!(code.contains(r#"__html.push_str("color: ");"#));
+  assert!(code.contains(r#"__esc(&format!("{}", { text_color }))"#));
+}
+
+#[test]
+fn multiple_style_props() {
+  let code = codegen(r#"<div style:color="c" style:font-size="fs">x</div>"#);
+  assert!(code.contains(r#"__html.push_str("color: ");"#));
+  assert!(code.contains(r#"__html.push_str("font-size: ");"#));
+  // Semicolon separator between properties.
+  assert!(code.contains(r#"__html.push_str("; ");"#));
+}
+
+// ── Actions (use:name) ──────────────────────────────────────────────────
+
+#[test]
+fn action_emitted_as_data_attr() {
+  let code = codegen(r#"<div use:tooltip="config">x</div>"#);
+  assert!(code.contains(r#"data-use-tooltip=\"config\""#));
+}
+
+#[test]
+fn action_without_argument() {
+  let code = codegen(r#"<div use:autofocus="">x</div>"#);
+  assert!(code.contains("data-use-autofocus"));
+}
+
+// ── Component props ─────────────────────────────────────────────────────
+
+#[test]
+fn component_with_static_props() {
+  let code = codegen(r#"<Button label="Click me" />"#);
+  assert!(code.contains(r#"Button::render("Click me")"#));
+}
+
+#[test]
+fn component_with_dynamic_prop() {
+  let code = codegen(r#"<Card title="{{ name }}" />"#);
+  assert!(code.contains("Card::render("));
+  assert!(code.contains("format!"));
+}
+
+#[test]
+fn component_prop_literal_braces_escaped() {
+  // Literal braces in a mixed prop value must be escaped so format! doesn't choke.
+  let code = codegen(r#"<Card title="Hello {world} {{ name }}" />"#);
+  // The format string should have {{ and }} for the literal braces.
+  assert!(code.contains("Hello {{world}}"));
+  // And a real placeholder for the expression.
+  assert!(code.contains("format!"));
+}
+
+#[test]
+fn component_with_children() {
+  let code = codegen(r#"<Modal><p>content</p></Modal>"#);
+  assert!(code.contains("Modal::render_with_slot(&__comp_slot)"));
+  assert!(code.contains(r#"__html.push_str("<p");"#));
+}
+
+// ── Named slots ─────────────────────────────────────────────────────────
+
+#[test]
+fn named_slot_with_fallback() {
+  let code = codegen(r#"<slot name="header">default header</slot>"#);
+  // Variable must be declared.
+  assert!(code.contains("let __slot_header: Option<&str> = None;"));
+  // Lookup and fallback.
+  assert!(code.contains("__slot_header.as_ref()"));
+  assert!(code.contains(r#"__html.push_str("default header");"#));
+}
+
+#[test]
+fn named_slot_without_fallback() {
+  let code = codegen(r#"<slot name="footer" />"#);
+  assert!(code.contains("let __slot_footer: Option<&str> = None;"));
+  assert!(code.contains("__slot_footer.as_ref()"));
+}
+
+#[test]
+fn named_slot_declaration_deduplicated() {
+  // Two slots with the same name should produce only one `let` declaration
+  // per render function (render + render_with_slot = 2 total).
+  let code = codegen(
+    r#"{#if show}<slot name="x">a</slot>{:else}<slot name="x">b</slot>{/if}"#,
+  );
+  assert_eq!(
+    code.matches("let __slot_x: Option<&str> = None;").count(),
+    2,
+    "expected exactly one declaration of __slot_x per render function"
+  );
+}
+
+// ── Scoped CSS rewriting ────────────────────────────────────────────────
+
+#[test]
+fn scoped_css_simple_selector() {
+  let code = codegen("<style scoped>.card { display: flex; }</style>\n<div>x</div>");
+  // The CSS should have the scope attribute appended to the selector.
+  assert!(code.contains(".card[data-s-"));
+  assert!(code.contains("{ display: flex; }"));
+}
+
+#[test]
+fn scoped_css_element_selector() {
+  let code = codegen("<style scoped>p { margin: 0; }</style>\n<p>x</p>");
+  assert!(code.contains("p[data-s-"));
+  assert!(code.contains("{ margin: 0; }"));
+}
+
+#[test]
+fn scoped_css_compound_selector() {
+  let code = codegen("<style scoped>div.card { color: red; }</style>\n<div>x</div>");
+  assert!(code.contains("div.card[data-s-"));
+}
+
+#[test]
+fn scoped_css_descendant_combinator() {
+  let code = codegen("<style scoped>.card p { color: red; }</style>\n<div>x</div>");
+  // Both parts of the descendant selector should be scoped.
+  assert!(code.contains(".card[data-s-"));
+  assert!(code.contains("p[data-s-"));
+}
+
+#[test]
+fn scoped_css_child_combinator() {
+  let code = codegen("<style scoped>.a > .b { color: red; }</style>\n<div>x</div>");
+  assert!(code.contains(".a[data-s-"));
+  assert!(code.contains("> .b[data-s-"));
+}
+
+#[test]
+fn scoped_css_comma_separated() {
+  let code = codegen("<style scoped>.a, .b { color: red; }</style>\n<div>x</div>");
+  assert!(code.contains(".a[data-s-"));
+  assert!(code.contains(".b[data-s-"));
+}
+
+#[test]
+fn scoped_css_pseudo_class() {
+  let code = codegen("<style scoped>.btn:hover { color: red; }</style>\n<div>x</div>");
+  // Scope attr should be inserted before the pseudo-class.
+  assert!(code.contains(".btn[data-s-"));
+  assert!(code.contains(":hover"));
+}
+
+#[test]
+fn scoped_css_pseudo_element() {
+  let code = codegen("<style scoped>.btn::before { content: ''; }</style>\n<div>x</div>");
+  assert!(code.contains(".btn[data-s-"));
+  assert!(code.contains("::before"));
+}
+
+#[test]
+fn unscoped_css_not_rewritten() {
+  let code = codegen("<style>.card { display: flex; }</style>\n<div>x</div>");
+  assert!(code.contains(".card { display: flex; }"));
+  // No scope attribute in the CSS.
+  assert!(!code.contains("[data-s-"));
+}
+
+// ── At-rules in scoped CSS ──────────────────────────────────────────────
+
+#[test]
+fn scoped_css_media_query_prelude_untouched() {
+  let code = codegen(
+    "<style scoped>@media (max-width: 768px) { .card { color: red; } }</style>\n<div>x</div>",
+  );
+  // The @media prelude must not be mangled.
+  assert!(code.contains("@media (max-width: 768px)"));
+  // The selector inside the media block must be scoped.
+  assert!(code.contains(".card[data-s-"));
+}
+
+#[test]
+fn scoped_css_supports_rule() {
+  let code = codegen(
+    "<style scoped>@supports (display: grid) { .grid { display: grid; } }</style>\n<div>x</div>",
+  );
+  assert!(code.contains("@supports (display: grid)"));
+  assert!(code.contains(".grid[data-s-"));
+}
+
+#[test]
+fn scoped_css_keyframes_not_scoped() {
+  let code = codegen(
+    "<style scoped>@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>\n<div>x</div>",
+  );
+  // @keyframes content must pass through as-is — no scope attributes.
+  assert!(code.contains("@keyframes spin"));
+  // "from" and "to" must NOT get [data-s-…] appended.
+  assert!(!code.contains("from[data-s-"));
+  assert!(!code.contains("to[data-s-"));
+}
+
+#[test]
+fn scoped_css_import_passthrough() {
+  let code = codegen(
+    "<style scoped>@import url('other.css'); .card { color: red; }</style>\n<div>x</div>",
+  );
+  assert!(code.contains("@import url('other.css');"));
+  assert!(code.contains(".card[data-s-"));
+}
+
+#[test]
+fn scoped_css_font_face_passthrough() {
+  let code = codegen(
+    "<style scoped>@font-face { font-family: 'Custom'; src: url('f.woff2'); }</style>\n<div>x</div>",
+  );
+  assert!(code.contains("@font-face"));
+  assert!(!code.contains("font-family[data-s-"));
+}
+
+#[test]
+fn scoped_css_mixed_rules_and_at_rules() {
+  let code = codegen(
+    "<style scoped>.a { color: red; } @media print { .b { display: none; } } .c { margin: 0; }</style>\n<div>x</div>",
+  );
+  assert!(code.contains(".a[data-s-"));
+  assert!(code.contains(".b[data-s-"));
+  assert!(code.contains(".c[data-s-"));
+  assert!(code.contains("@media print"));
+}
+
+// ── Empty directive value guards ────────────────────────────────────────
+
+#[test]
+fn empty_style_prop_value_skipped() {
+  let code = codegen(r#"<div style:color="">text</div>"#);
+  // Empty style prop should be silently skipped — no style attribute at all.
+  assert!(!code.contains("style="));
+}
+
+#[test]
+fn empty_class_toggle_condition_skipped() {
+  let code = codegen(r#"<div class:active="">text</div>"#);
+  // Empty condition should be silently skipped — no __classes block.
+  assert!(!code.contains("__classes"));
+}
+
+#[test]
+fn mixed_empty_and_valid_style_props() {
+  let code = codegen(r#"<div style:color="" style:background="bg">text</div>"#);
+  // Only the valid prop should appear.
+  assert!(code.contains("style="));
+  assert!(code.contains("background"));
+  assert!(!code.contains("color"));
 }

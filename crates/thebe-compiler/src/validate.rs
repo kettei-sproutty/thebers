@@ -78,6 +78,9 @@ impl ValidationCtx {
     self.check_duplicate_style_props(&el.tag, &el.style_props);
     self.check_event_modifiers(&el.events);
     self.check_empty_handlers(&el.events);
+    self.check_empty_style_prop_values(&el.style_props);
+    self.check_empty_class_toggle_conditions(&el.class_toggles);
+    self.check_empty_binding_expressions(&el.bindings);
     self.validate_nodes(&el.children);
   }
 
@@ -87,6 +90,7 @@ impl ValidationCtx {
     self.check_duplicate_bindings(&comp.name, &comp.bindings);
     self.check_event_modifiers(&comp.events);
     self.check_empty_handlers(&comp.events);
+    self.check_empty_binding_expressions(&comp.bindings);
     self.validate_nodes(&comp.children);
   }
 
@@ -234,6 +238,51 @@ impl ValidationCtx {
           event: ev.event.clone(),
           span: ev.span,
         });
+      }
+    }
+  }
+
+  fn check_empty_style_prop_values(&mut self, props: &[crate::ir::IrStyleProp]) {
+    for p in props {
+      if p.value.trim().is_empty() {
+        self
+          .warnings
+          .push(ValidationWarning::EmptyStylePropValue {
+            property: p.property.clone(),
+            span: p.span,
+          });
+      }
+    }
+  }
+
+  fn check_empty_class_toggle_conditions(
+    &mut self,
+    toggles: &[crate::ir::IrClassToggle],
+  ) {
+    for t in toggles {
+      if t.condition.trim().is_empty() {
+        self
+          .warnings
+          .push(ValidationWarning::EmptyClassToggleCondition {
+            class: t.class.clone(),
+            span: t.span,
+          });
+      }
+    }
+  }
+
+  fn check_empty_binding_expressions(
+    &mut self,
+    bindings: &[crate::ir::IrBinding],
+  ) {
+    for b in bindings {
+      if b.expression.trim().is_empty() {
+        self
+          .warnings
+          .push(ValidationWarning::EmptyBindingExpression {
+            property: b.property.clone(),
+            span: b.span,
+          });
       }
     }
   }

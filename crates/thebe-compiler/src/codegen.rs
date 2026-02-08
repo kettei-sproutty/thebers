@@ -4,13 +4,19 @@
 //! Rust module string with a `render()` function that returns HTML.
 
 use crate::ir::CompiledComponent;
+use crate::ir::IrAction;
 use crate::ir::IrAttribute;
+use crate::ir::IrBinding;
+use crate::ir::IrClassToggle;
 use crate::ir::IrComponentRef;
 use crate::ir::IrEach;
 use crate::ir::IrElement;
+use crate::ir::IrEventHandler;
 use crate::ir::IrIf;
 use crate::ir::IrNode;
 use crate::ir::IrSlot;
+use crate::ir::IrStyleProp;
+use crate::ir::EventModifier;
 
 use thebe_ast::TemplateNode;
 
@@ -176,6 +182,16 @@ impl Emitter {
 
     self.line("let mut __html = String::new();");
 
+    // Declare named slot variables so that `<slot name="X">` fallback
+    // logic compiles. These are initialised to `None` here; once full
+    // named-slot passing is wired up the caller will supply real values.
+    let named_slots = collect_named_slots(&c.template);
+    for name in &named_slots {
+      self.line(&format!(
+        "let __slot_{name}: Option<&str> = None;"
+      ));
+    }
+
     self.slotted = slotted;
     for node in &c.template {
       self.emit_node(node);
@@ -212,9 +228,37 @@ impl Emitter {
     // Open tag name.
     self.line(&format!("__html.push_str(\"<{}\");", el.tag));
 
-    // Attributes.
+    // Static and dynamic attributes.
     for attr in &el.attributes {
       self.emit_attr(attr);
+    }
+
+    // Conditional CSS classes (class:name="condition").
+    if !el.class_toggles.is_empty() {
+      self.emit_class_toggles(&el.class_toggles);
+    }
+
+    // Inline style properties (style:prop="value").
+    if !el.style_props.is_empty() {
+      self.emit_style_props(&el.style_props);
+    }
+
+    // Event handlers (on:event="handler") — emitted as data attributes
+    // for client-side hydration.
+    for event in &el.events {
+      self.emit_event_handler(event);
+    }
+
+    // Two-way bindings (bind:prop="expr") — emitted as data attributes
+    // for client-side hydration.
+    for binding in &el.bindings {
+      self.emit_binding(binding);
+    }
+
+    // Action hooks (use:action="arg") — emitted as data attributes
+    // for client-side hydration.
+    for action in &el.actions {
+      self.emit_action(action);
     }
 
     // Scope attributes for scoped style isolation.
@@ -280,6 +324,129 @@ impl Emitter {
     }
   }
 
+  /// Emit conditional CSS class toggles as a single `class` attribute fragment.
+  ///
+  /// For `class:active="is_active"` and `class:hidden="!visible"`, generates:
+  /// ```text
+  /// {
+  ///   let mut __classes = Vec::new();
+  ///   if is_active { __classes.push("active"); }
+  ///   if !visible { __classes.push("hidden"); }
+  ///   if !__classes.is_empty() {
+  ///     __html.push_str(" class=\"");
+  ///     __html.push_str(&__classes.join(" "));
+  ///     __html.push_str("\"");
+  ///   }
+  /// }
+  /// ```
+  fn emit_class_toggles(&mut self, toggles: &[IrClassToggle]) {
+    // Filter out toggles with empty conditions — they would produce invalid Rust.
+    let valid: Vec<_> = toggles
+      .iter()
+      .filter(|t| !t.condition.trim().is_empty())
+      .collect();
+    if valid.is_empty() {
+      return;
+    }
+    self.line("{");
+    self.indent();
+    self.line("let mut __classes = Vec::new();");
+    for toggle in &valid {
+      self.line(&format!(
+        "if {} {{ __classes.push(\"{}\"); }}",
+        toggle.condition, toggle.class
+      ));
+    }
+    self.line("if !__classes.is_empty() {");
+    self.indent();
+    self.line("__html.push_str(\" class=\\\"\");");
+    self.line("__html.push_str(&__classes.join(\" \"));");
+    self.line("__html.push_str(\"\\\"\");");
+    self.dedent();
+    self.line("}");
+    self.dedent();
+    self.line("}");
+  }
+
+  /// Emit inline style properties as a single `style` attribute.
+  ///
+  /// For `style:color="text_color"` and `style:font-size="size"`, generates:
+  /// ```text
+  /// __html.push_str(" style=\"");
+  /// __html.push_str("color: ");
+  /// __html.push_str(&__esc(&format!("{}", { text_color })));
+  /// __html.push_str("; font-size: ");
+  /// __html.push_str(&__esc(&format!("{}", { size })));
+  /// __html.push_str("\"");
+  /// ```
+  fn emit_style_props(&mut self, props: &[IrStyleProp]) {
+    // Filter out props with empty values — they would produce invalid Rust.
+    let valid: Vec<_> = props.iter().filter(|p| !p.value.trim().is_empty()).collect();
+    if valid.is_empty() {
+      return;
+    }
+    self.line("__html.push_str(\" style=\\\"\");");
+    for (i, prop) in valid.iter().enumerate() {
+      if i > 0 {
+        self.line("__html.push_str(\"; \");");
+      }
+      self.line(&format!(
+        "__html.push_str(\"{}: \");",
+        esc_rs(&prop.property)
+      ));
+      self.line(&format!(
+        "__html.push_str(&__esc(&format!(\"{{}}\", {{ {} }})));",
+        prop.value
+      ));
+    }
+    self.line("__html.push_str(\"\\\"\");");
+  }
+
+  /// Emit an event handler as a `data-on-EVENT` attribute for client hydration.
+  ///
+  /// Event modifiers are encoded as a pipe-separated list in a companion
+  /// `data-on-EVENT-mod` attribute so the client runtime can apply them.
+  fn emit_event_handler(&mut self, event: &IrEventHandler) {
+    self.line(&format!(
+      "__html.push_str(\" data-on-{}=\\\"{}\\\"\");",
+      esc_rs(&esc_html_attr(&event.event)),
+      esc_rs(&esc_html_attr(&event.handler)),
+    ));
+    if !event.modifiers.is_empty() {
+      let mods: Vec<&str> = event.modifiers.iter().copied().map(modifier_name).collect();
+      self.line(&format!(
+        "__html.push_str(\" data-on-{}-mod=\\\"{}\\\"\");",
+        esc_rs(&esc_html_attr(&event.event)),
+        esc_rs(&esc_html_attr(&mods.join("|"))),
+      ));
+    }
+  }
+
+  /// Emit a two-way binding as a `data-bind-PROP` attribute for client hydration.
+  fn emit_binding(&mut self, binding: &IrBinding) {
+    self.line(&format!(
+      "__html.push_str(\" data-bind-{}=\\\"{}\\\"\");",
+      esc_rs(&esc_html_attr(&binding.property)),
+      esc_rs(&esc_html_attr(&binding.expression)),
+    ));
+  }
+
+  /// Emit an action hook as a `data-use-NAME` attribute for client hydration.
+  fn emit_action(&mut self, action: &IrAction) {
+    if action.argument.is_empty() {
+      self.line(&format!(
+        "__html.push_str(\" data-use-{}\");",
+        esc_rs(&esc_html_attr(&action.name)),
+      ));
+    } else {
+      self.line(&format!(
+        "__html.push_str(\" data-use-{}=\\\"{}\\\"\");",
+        esc_rs(&esc_html_attr(&action.name)),
+        esc_rs(&esc_html_attr(&action.argument)),
+      ));
+    }
+  }
+
   fn emit_if(&mut self, ib: &IrIf) {
     for (i, branch) in ib.branches.iter().enumerate() {
       if i == 0 {
@@ -321,19 +488,124 @@ impl Emitter {
 
   fn emit_component(&mut self, comp: &IrComponentRef) {
     // SSR: call the component's render function and append its output.
-    // TODO: pass props and slot content once component resolution is in place.
-    self.line(&format!(
-      "__html.push_str(&{}::render());",
-      comp.name
-    ));
+    // Props are passed as keyword-style arguments. The component's render
+    // function signature is expected to accept them in declaration order.
+    if comp.props.is_empty() && comp.children.is_empty() {
+      self.line(&format!(
+        "__html.push_str(&{}::render());",
+        comp.name
+      ));
+    } else if comp.children.is_empty() {
+      // Pass props as arguments.
+      let args = Self::build_prop_args(&comp.props);
+      self.line(&format!(
+        "__html.push_str(&{}::render({args}));",
+        comp.name
+      ));
+    } else {
+      // Component with children (default slot content).
+      // Render children into __comp_slot by temporarily redirecting __html.
+      self.line("{");
+      self.indent();
+      self.line("let mut __comp_slot = String::new();");
+      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+      for child in &comp.children {
+        self.emit_node(child);
+      }
+      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+
+      if comp.props.is_empty() {
+        self.line(&format!(
+          "__html.push_str(&{}::render_with_slot(&__comp_slot));",
+          comp.name
+        ));
+      } else {
+        let args = Self::build_prop_args(&comp.props);
+        self.line(&format!(
+          "__html.push_str(&{}::render_with_slot(&__comp_slot, {args}));",
+          comp.name
+        ));
+      }
+      self.dedent();
+      self.line("}");
+    }
+  }
+
+  /// Build a comma-separated argument string from component props.
+  ///
+  /// Each prop value is evaluated and converted to a string reference.
+  /// Static values are passed directly; dynamic expressions are formatted.
+  fn build_prop_args(props: &[IrAttribute]) -> String {
+    props
+      .iter()
+      .map(|p| {
+        if p.value.is_empty() {
+          // Boolean prop — pass `true`.
+          "true".to_string()
+        } else {
+          let all_static = p.value.iter().all(|v| matches!(v, TemplateNode::Text(_)));
+          if all_static {
+            let val: String = p
+              .value
+              .iter()
+              .map(|v| match v {
+                TemplateNode::Text(t) => t.as_str(),
+                TemplateNode::Expr { .. } => unreachable!(),
+              })
+              .collect();
+            format!("\"{}\"", esc_rs(&val))
+          } else if p.value.len() == 1 {
+            match &p.value[0] {
+              TemplateNode::Expr { expr, .. } => format!("&format!(\"{{}}\", {{ {expr} }})"),
+              TemplateNode::Text(t) => format!("\"{}\"", esc_rs(t)),
+            }
+          } else {
+            // Mixed static/dynamic — build with format!.
+            let mut fmt_str = String::new();
+            let mut fmt_args = Vec::new();
+            for part in &p.value {
+              match part {
+                TemplateNode::Text(t) => fmt_str.push_str(&esc_fmt(&esc_rs(t))),
+                TemplateNode::Expr { expr, .. } => {
+                  fmt_str.push_str("{}");
+                  fmt_args.push(expr.clone());
+                }
+              }
+            }
+            if fmt_args.is_empty() {
+              format!("\"{fmt_str}\"")
+            } else {
+              format!("&format!(\"{fmt_str}\", {})", fmt_args.join(", "))
+            }
+          }
+        }
+      })
+      .collect::<Vec<_>>()
+      .join(", ")
   }
 
   fn emit_slot(&mut self, slot: &IrSlot) {
-    if self.slotted {
-      // In slotted mode, inject the passed slot content.
+    if let Some(name) = &slot.name {
+      // Named slot: look up the slot variable `__slot_NAME`.
+      let var = format!("__slot_{name}");
+      self.line(&format!("if let Some(__named) = {var}.as_ref() {{"));
+      self.indent();
+      self.line("__html.push_str(__named);");
+      self.dedent();
+      if !slot.fallback.is_empty() {
+        self.line("} else {");
+        self.indent();
+        for child in &slot.fallback {
+          self.emit_node(child);
+        }
+        self.dedent();
+      }
+      self.line("}");
+    } else if self.slotted {
+      // Default slot in slotted mode: inject the passed slot content.
       self.line("__html.push_str(__slot);");
     } else {
-      // In standalone mode, render fallback content.
+      // Default slot in standalone mode: render fallback content.
       for child in &slot.fallback {
         self.emit_node(child);
       }
@@ -350,7 +622,17 @@ impl Emitter {
       self.line("pub const STYLES: &[&str] = &[");
       self.indent();
       for style in &c.styles {
-        self.line(&format!("\"{}\",", esc_rs(&style.content)));
+        if style.scoped {
+          if let Some(id) = &style.scope_id {
+            // Rewrite selectors to include the scope attribute.
+            let rewritten = rewrite_scoped_css(&style.content, id);
+            self.line(&format!("\"{}\",", esc_rs(&rewritten)));
+          } else {
+            self.line(&format!("\"{}\",", esc_rs(&style.content)));
+          }
+        } else {
+          self.line(&format!("\"{}\",", esc_rs(&style.content)));
+        }
       }
       self.dedent();
       self.line("];");
@@ -406,6 +688,60 @@ impl Emitter {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Recursively collect all distinct named-slot names from a template tree.
+///
+/// Returns a sorted, deduplicated list of slot names so that the codegen
+/// can emit `let __slot_NAME: Option<&str> = None;` declarations.
+fn collect_named_slots(nodes: &[IrNode]) -> Vec<String> {
+  let mut names = Vec::new();
+  collect_named_slots_inner(nodes, &mut names);
+  names.sort();
+  names.dedup();
+  names
+}
+
+fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {
+  for node in nodes {
+    match node {
+      IrNode::Slot(slot) => {
+        if let Some(name) = &slot.name {
+          out.push(name.clone());
+        }
+        collect_named_slots_inner(&slot.fallback, out);
+      }
+      IrNode::Element(el) => {
+        collect_named_slots_inner(&el.children, out);
+      }
+      IrNode::Component(comp) => {
+        collect_named_slots_inner(&comp.children, out);
+      }
+      IrNode::If(ib) => {
+        for branch in &ib.branches {
+          collect_named_slots_inner(&branch.children, out);
+        }
+      }
+      IrNode::Each(each) => {
+        collect_named_slots_inner(&each.children, out);
+      }
+      IrNode::Text(_) | IrNode::Expr(_) => {}
+    }
+  }
+}
+
+/// Map an [`EventModifier`] variant to its canonical string name.
+fn modifier_name(m: EventModifier) -> &'static str {
+  match m {
+    EventModifier::PreventDefault => "preventDefault",
+    EventModifier::StopPropagation => "stopPropagation",
+    EventModifier::Once => "once",
+    EventModifier::Capture => "capture",
+    EventModifier::Self_ => "self",
+    EventModifier::Trusted => "trusted",
+    EventModifier::Passive => "passive",
+    EventModifier::NonPassive => "nonpassive",
+  }
+}
+
 /// Escape a string for inclusion inside a Rust string literal.
 fn esc_rs(s: &str) -> String {
   s.replace('\\', "\\\\")
@@ -413,4 +749,396 @@ fn esc_rs(s: &str) -> String {
     .replace('\n', "\\n")
     .replace('\r', "\\r")
     .replace('\t', "\\t")
+}
+
+/// Escape a string for safe inclusion in an HTML attribute value.
+///
+/// This prevents attribute injection and malformed HTML when user-supplied
+/// strings (handler names, binding expressions, etc.) are embedded in
+/// `data-*` attributes. Applied **before** [`esc_rs`] so the generated
+/// Rust source emits valid, safe HTML at runtime.
+fn esc_html_attr(s: &str) -> String {
+  let mut out = String::with_capacity(s.len());
+  for c in s.chars() {
+    match c {
+      '&' => out.push_str("&amp;"),
+      '"' => out.push_str("&quot;"),
+      '\'' => out.push_str("&#x27;"),
+      '<' => out.push_str("&lt;"),
+      '>' => out.push_str("&gt;"),
+      _ => out.push(c),
+    }
+  }
+  out
+}
+
+/// Escape literal `{` and `}` for use inside a `format!` string.
+///
+/// `{` → `{{`, `}` → `}}` so that they pass through `format!` as-is
+/// instead of being interpreted as format placeholders.
+fn esc_fmt(s: &str) -> String {
+  s.replace('{', "{{").replace('}', "}}")
+}
+
+/// Rewrite CSS selectors to include a scoped attribute selector.
+///
+/// Appends `[data-SCOPE_ID]` to each selector so that styles only
+/// apply to elements rendered by this component (which carry the
+/// corresponding `data-s-XXXXXXXX` attribute).
+///
+/// This is a lightweight rewriter that handles common cases:
+/// - Simple selectors: `.card` → `.card[data-s-abcdef01]`
+/// - Compound selectors: `div.card` → `div.card[data-s-abcdef01]`
+/// - Combinators: `.card > p` → `.card[data-s-abcdef01] > p[data-s-abcdef01]`
+/// - Pseudo-elements: `.card::before` → `.card[data-s-abcdef01]::before`
+/// - Comma-separated: `.a, .b` → `.a[data-s-abcdef01], .b[data-s-abcdef01]`
+/// - At-rules: `@media (…) { .a { … } }` — prelude passed through,
+///   selectors inside the block are scoped recursively.
+/// - `@keyframes` / `@font-face` — passed through without scoping.
+fn rewrite_scoped_css(css: &str, scope_id: &str) -> String {
+  let attr = format!("[data-{scope_id}]");
+  let mut result = String::with_capacity(css.len() * 2);
+  let mut pos = 0;
+  let bytes = css.as_bytes();
+
+  while pos < bytes.len() {
+    // Skip whitespace, preserving it.
+    if bytes[pos].is_ascii_whitespace() {
+      result.push(bytes[pos] as char);
+      pos += 1;
+      continue;
+    }
+
+    // Skip comments.
+    if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
+      let start = pos;
+      pos += 2;
+      while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
+        pos += 1;
+      }
+      if pos + 1 < bytes.len() {
+        pos += 2; // skip */
+      }
+      result.push_str(&css[start..pos]);
+      continue;
+    }
+
+    // At-rule: starts with `@`.
+    if bytes[pos] == b'@' {
+      pos = handle_at_rule(css, pos, &attr, &mut result);
+      continue;
+    }
+
+    // Regular rule: collect selector up to `{`, scope it, then pass
+    // through the declaration block.
+    let sel_start = pos;
+    while pos < bytes.len() && bytes[pos] != b'{' {
+      pos += 1;
+    }
+    let selector_text = &css[sel_start..pos];
+
+    if !selector_text.trim().is_empty() {
+      let selectors: Vec<&str> = selector_text.split(',').collect();
+      for (i, sel) in selectors.iter().enumerate() {
+        if i > 0 {
+          result.push_str(", ");
+        }
+        let rewritten = scope_selector(sel.trim(), &attr);
+        result.push_str(&rewritten);
+      }
+    }
+
+    // Copy the declaration block `{ … }` verbatim.
+    if pos < bytes.len() && bytes[pos] == b'{' {
+      let block_end = find_matching_brace(css, pos);
+      result.push_str(&css[pos..block_end]);
+      pos = block_end;
+    }
+  }
+
+  result
+}
+
+/// Handle a CSS at-rule starting at `pos` (which points to `@`).
+///
+/// - **Conditional at-rules** (`@media`, `@supports`, `@layer`, `@container`,
+///   `@scope`, `@document`): the prelude is passed through verbatim; the
+///   nested block's selectors are scoped recursively.
+/// - **Non-selector at-rules** (`@keyframes`, `@font-face`, `@import`,
+///   `@charset`, `@namespace`, `@property`, `@counter-style`): passed
+///   through entirely without scoping.
+///
+/// Returns the new position after the at-rule.
+fn handle_at_rule(css: &str, start: usize, attr: &str, out: &mut String) -> usize {
+  let bytes = css.as_bytes();
+
+  // Extract the at-keyword (e.g. "media", "keyframes").
+  let keyword_start = start + 1; // skip '@'
+  let mut keyword_end = keyword_start;
+  while keyword_end < bytes.len() && bytes[keyword_end].is_ascii_alphanumeric()
+    || (keyword_end < bytes.len() && bytes[keyword_end] == b'-')
+  {
+    keyword_end += 1;
+  }
+  let keyword = &css[keyword_start..keyword_end];
+
+  // Find the opening `{` or `;` (for statement at-rules like @import).
+  let mut pos = keyword_end;
+  while pos < bytes.len() && bytes[pos] != b'{' && bytes[pos] != b';' {
+    pos += 1;
+  }
+
+  // Statement at-rule (e.g. `@import url(…);`) — no block, pass through.
+  if pos >= bytes.len() || bytes[pos] == b';' {
+    let end = if pos < bytes.len() { pos + 1 } else { pos };
+    out.push_str(&css[start..end]);
+    return end;
+  }
+
+  // Block at-rule — decide whether to scope its contents.
+  let prelude = &css[start..pos]; // "@media (max-width: 768px)"
+  let block_end = find_matching_brace(css, pos);
+  let block_inner = &css[pos + 1..block_end - 1]; // contents between { and }
+
+  // At-rules whose blocks contain selectors that should be scoped.
+  let scope_inner = matches!(
+    keyword.to_ascii_lowercase().as_str(),
+    "media" | "supports" | "layer" | "container" | "scope" | "document"
+  );
+
+  if scope_inner {
+    out.push_str(prelude);
+    out.push_str(" {");
+    // Recursively scope selectors inside the block.
+    let rewritten_inner = rewrite_scoped_inner(block_inner, attr);
+    out.push_str(&rewritten_inner);
+    out.push('}');
+  } else {
+    // @keyframes, @font-face, etc. — pass through as-is.
+    out.push_str(&css[start..block_end]);
+  }
+
+  block_end
+}
+
+/// Rewrite selectors inside an at-rule block (recursive inner pass).
+///
+/// This handles the same logic as the top level of `rewrite_scoped_css`
+/// but operates on the content between `{` and `}` of an at-rule block.
+fn rewrite_scoped_inner(css: &str, attr: &str) -> String {
+  let mut result = String::with_capacity(css.len() * 2);
+  let mut pos = 0;
+  let bytes = css.as_bytes();
+
+  while pos < bytes.len() {
+    if bytes[pos].is_ascii_whitespace() {
+      result.push(bytes[pos] as char);
+      pos += 1;
+      continue;
+    }
+
+    // Skip comments.
+    if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
+      let start = pos;
+      pos += 2;
+      while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
+        pos += 1;
+      }
+      if pos + 1 < bytes.len() {
+        pos += 2;
+      }
+      result.push_str(&css[start..pos]);
+      continue;
+    }
+
+    // Nested at-rule.
+    if bytes[pos] == b'@' {
+      pos = handle_at_rule(css, pos, attr, &mut result);
+      continue;
+    }
+
+    // Selector up to `{`.
+    let sel_start = pos;
+    while pos < bytes.len() && bytes[pos] != b'{' {
+      pos += 1;
+    }
+    let selector_text = &css[sel_start..pos];
+
+    if !selector_text.trim().is_empty() {
+      let selectors: Vec<&str> = selector_text.split(',').collect();
+      for (i, sel) in selectors.iter().enumerate() {
+        if i > 0 {
+          result.push_str(", ");
+        }
+        let rewritten = scope_selector(sel.trim(), attr);
+        result.push_str(&rewritten);
+      }
+    }
+
+    // Copy the declaration block.
+    if pos < bytes.len() && bytes[pos] == b'{' {
+      let block_end = find_matching_brace(css, pos);
+      result.push_str(&css[pos..block_end]);
+      pos = block_end;
+    }
+  }
+
+  result
+}
+
+/// Find the position just past the matching `}` for a `{` at `open_pos`.
+fn find_matching_brace(css: &str, open_pos: usize) -> usize {
+  let bytes = css.as_bytes();
+  debug_assert_eq!(bytes[open_pos], b'{');
+  let mut depth: usize = 0;
+  let mut pos = open_pos;
+
+  while pos < bytes.len() {
+    match bytes[pos] {
+      b'{' => depth += 1,
+      b'}' => {
+        depth -= 1;
+        if depth == 0 {
+          return pos + 1;
+        }
+      }
+      _ => {}
+    }
+    pos += 1;
+  }
+
+  // Unterminated block — return end of input.
+  bytes.len()
+}
+
+/// Scope a single CSS selector by appending the scope attribute selector
+/// to each simple selector in the compound/complex selector.
+///
+/// Handles:
+/// - Pseudo-elements: `.btn::before` → `.btn[data-s-X]::before`
+/// - Pseudo-classes: `.btn:hover` → `.btn[data-s-X]:hover`
+/// - Combinators: `.a > .b` → `.a[data-s-X] > .b[data-s-X]`
+fn scope_selector(selector: &str, attr: &str) -> String {
+  if selector.is_empty() {
+    return String::new();
+  }
+
+  // Split on combinators while preserving them.
+  let parts = split_on_combinators(selector);
+  let mut result = String::new();
+
+  for part in &parts {
+    let trimmed = part.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+
+    // Check if this part is a combinator.
+    if matches!(trimmed, ">" | "+" | "~") {
+      result.push(' ');
+      result.push_str(trimmed);
+      result.push(' ');
+      continue;
+    }
+
+    // Descendant combinator (space between parts) — add space if needed.
+    if !result.is_empty() && !result.ends_with(' ') {
+      result.push(' ');
+    }
+
+    // Find where to insert the scope attribute: before pseudo-elements
+    // and pseudo-classes.
+    if let Some(pseudo_pos) = find_pseudo_boundary(trimmed) {
+      result.push_str(&trimmed[..pseudo_pos]);
+      result.push_str(attr);
+      result.push_str(&trimmed[pseudo_pos..]);
+    } else {
+      result.push_str(trimmed);
+      result.push_str(attr);
+    }
+  }
+
+  result
+}
+
+/// Split a selector on CSS combinators (`>`, `+`, `~`, and whitespace).
+///
+/// Returns a list of parts where combinators are their own entries.
+fn split_on_combinators(selector: &str) -> Vec<String> {
+  let mut parts = Vec::new();
+  let mut current = String::new();
+  let mut chars = selector.chars().peekable();
+  // Track bracket depth for attribute selectors like `[data-x]`.
+  let mut bracket_depth: usize = 0;
+
+  while let Some(&c) = chars.peek() {
+    match c {
+      '[' => {
+        bracket_depth += 1;
+        current.push(c);
+        chars.next();
+      }
+      ']' => {
+        bracket_depth = bracket_depth.saturating_sub(1);
+        current.push(c);
+        chars.next();
+      }
+      '>' | '+' | '~' if bracket_depth == 0 => {
+        if !current.trim().is_empty() {
+          parts.push(current.clone());
+          current.clear();
+        }
+        parts.push(c.to_string());
+        chars.next();
+      }
+      ' ' | '\t' | '\n' if bracket_depth == 0 => {
+        // Could be a descendant combinator or just whitespace around
+        // another combinator. Consume all whitespace.
+        if !current.trim().is_empty() {
+          parts.push(current.clone());
+          current.clear();
+        }
+        while let Some(&ws) = chars.peek() {
+          if ws == ' ' || ws == '\t' || ws == '\n' {
+            chars.next();
+          } else {
+            break;
+          }
+        }
+      }
+      _ => {
+        current.push(c);
+        chars.next();
+      }
+    }
+  }
+
+  if !current.trim().is_empty() {
+    parts.push(current);
+  }
+
+  parts
+}
+
+/// Find the byte position where pseudo-elements (`::`) or pseudo-classes
+/// (`:`) begin in a simple selector, ignoring attribute selectors.
+fn find_pseudo_boundary(selector: &str) -> Option<usize> {
+  let mut i = 0;
+  let bytes = selector.as_bytes();
+  while i < bytes.len() {
+    match bytes[i] {
+      b'[' => {
+        // Skip attribute selector.
+        while i < bytes.len() && bytes[i] != b']' {
+          i += 1;
+        }
+        if i < bytes.len() {
+          i += 1; // skip ']'
+        }
+      }
+      b':' => return Some(i),
+      _ => i += 1,
+    }
+  }
+  None
 }

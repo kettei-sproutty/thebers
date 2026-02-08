@@ -200,3 +200,41 @@ fn named_slot_plus_default_slot_no_warning() {
   let w = warnings(r#"<div><slot /><slot name="footer" /></div>"#);
   assert!(w.is_empty());
 }
+
+// ── Empty directive value warnings ──────────────────────────────────────
+
+#[test]
+fn empty_style_prop_value_warns() {
+  let w = warnings(r#"<div style:color="">text</div>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::EmptyStylePropValue { property, .. } if property == "color"
+  ));
+}
+
+#[test]
+fn empty_class_toggle_condition_warns() {
+  let w = warnings(r#"<div class:active="">text</div>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::EmptyClassToggleCondition { class, .. } if class == "active"
+  ));
+}
+
+#[test]
+fn empty_binding_expression_warns() {
+  let w = warnings(r#"<input bind:value="" />"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::EmptyBindingExpression { property, .. } if property == "value"
+  ));
+}
+
+#[test]
+fn nonempty_style_prop_no_warning() {
+  let w = warnings(r#"<div style:color="theme_color">text</div>"#);
+  assert!(w.is_empty(), "expected no warnings, got: {w:?}");
+}
