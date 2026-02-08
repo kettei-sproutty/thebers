@@ -1,0 +1,11 @@
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 20px;
+  }
+</style>
+
+<Header />
+
+<slot />

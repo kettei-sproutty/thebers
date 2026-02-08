@@ -1,0 +1,4 @@
+<article>
+  <h1>Blog Post: {{ slug }}</h1>
+  <p>This is a dynamic route demo.</p>
+</article>

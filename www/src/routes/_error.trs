@@ -1,0 +1,9 @@
+<style>
+  .error { color: red; text-align: center; margin-top: 100px; }
+</style>
+
+<div class="error">
+  <h1>404</h1>
+  <p>Page not found.</p>
+  <a href="/">Go home</a>
+</div>

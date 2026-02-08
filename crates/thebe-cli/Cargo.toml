@@ -1,0 +1,17 @@
+[package]
+name = "thebe-cli"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "thebe"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.101"
+clap = { version = "4", features = ["derive"] }
+thebe-ast = { path = "../thebe-ast" }
+thebe-compiler = { path = "../thebe-compiler" }
+
+[lints]
+workspace = true

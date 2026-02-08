@@ -292,6 +292,13 @@ impl<'a> HtmlParser<'a> {
     }
     let tag = self.input[tag_start..self.pos].to_string();
 
+    if !is_valid_tag_name(&tag) {
+      return Err(ParseError::MalformedTag {
+        detail: format!("invalid tag name `{tag}`"),
+        span: Span::new(elem_start, self.abs_pos()),
+      });
+    }
+
     // Parse attributes and directives.
     let mut attributes = Vec::new();
     let mut directives = Vec::new();
@@ -381,6 +388,13 @@ impl<'a> HtmlParser<'a> {
       self.pos += ch.len_utf8();
     }
     let full_name = &self.input[name_start..self.pos];
+
+    if !is_valid_attr_name(full_name) {
+      return Err(ParseError::MalformedTag {
+        detail: format!("invalid attribute name `{full_name}`"),
+        span: Span::new(attr_start, self.abs_pos()),
+      });
+    }
 
     // Boolean attribute (no `=`)?
     if !self.remaining().starts_with('=') {
@@ -593,6 +607,31 @@ fn parse_directive_name(name: &str) -> Option<(DirectiveKind, String, Vec<String
   } else {
     None
   }
+}
+
+/// Check that a tag name contains only valid characters.
+///
+/// Valid: starts with ASCII letter, followed by ASCII alphanumeric or `-`.
+fn is_valid_tag_name(name: &str) -> bool {
+  let mut chars = name.chars();
+  match chars.next() {
+    Some(c) if c.is_ascii_alphabetic() => {}
+    _ => return false,
+  }
+  chars.all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Check that an attribute name contains only valid characters.
+///
+/// Valid: starts with ASCII letter, `_`, or `:`, followed by
+/// ASCII alphanumeric, `_`, `-`, `.`, `:`, or `|` (for event modifiers).
+fn is_valid_attr_name(name: &str) -> bool {
+  let mut chars = name.chars();
+  match chars.next() {
+    Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {}
+    _ => return false,
+  }
+  chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | '|'))
 }
 
 /// Parse `"iterable as binding"` or `"iterable as binding, index"`.

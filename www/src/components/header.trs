@@ -1,0 +1,21 @@
+<style>
+  nav {
+    margin-bottom: 20px;
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+  }
+  nav a {
+    margin-right: 10px;
+    color: #333;
+    text-decoration: none;
+  }
+  nav a:hover {
+    text-decoration: underline;
+  }
+</style>
+
+<nav>
+  <a href="/">Home</a>
+  <a href="/about">About</a>
+  <a href="/blog/hello-world">Blog Post</a>
+</nav>
