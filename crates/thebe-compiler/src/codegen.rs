@@ -396,15 +396,15 @@ impl Emitter {
   fn emit_event_handler(&mut self, event: &IrEventHandler) {
     self.line(&format!(
       "__html.push_str(\" data-on-{}=\\\"{}\\\"\");",
-      esc_rs(&event.event),
-      esc_rs(&event.handler),
+      esc_rs(&esc_html_attr(&event.event)),
+      esc_rs(&esc_html_attr(&event.handler)),
     ));
     if !event.modifiers.is_empty() {
       let mods: Vec<&str> = event.modifiers.iter().copied().map(modifier_name).collect();
       self.line(&format!(
         "__html.push_str(\" data-on-{}-mod=\\\"{}\\\"\");",
-        esc_rs(&event.event),
-        mods.join("|"),
+        esc_rs(&esc_html_attr(&event.event)),
+        esc_rs(&esc_html_attr(&mods.join("|"))),
       ));
     }
   }
@@ -413,8 +413,8 @@ impl Emitter {
   fn emit_binding(&mut self, binding: &IrBinding) {
     self.line(&format!(
       "__html.push_str(\" data-bind-{}=\\\"{}\\\"\");",
-      esc_rs(&binding.property),
-      esc_rs(&binding.expression),
+      esc_rs(&esc_html_attr(&binding.property)),
+      esc_rs(&esc_html_attr(&binding.expression)),
     ));
   }
 
@@ -423,13 +423,13 @@ impl Emitter {
     if action.argument.is_empty() {
       self.line(&format!(
         "__html.push_str(\" data-use-{}\");",
-        esc_rs(&action.name),
+        esc_rs(&esc_html_attr(&action.name)),
       ));
     } else {
       self.line(&format!(
         "__html.push_str(\" data-use-{}=\\\"{}\\\"\");",
-        esc_rs(&action.name),
-        esc_rs(&action.argument),
+        esc_rs(&esc_html_attr(&action.name)),
+        esc_rs(&esc_html_attr(&action.argument)),
       ));
     }
   }
@@ -741,6 +741,27 @@ fn esc_rs(s: &str) -> String {
     .replace('\n', "\\n")
     .replace('\r', "\\r")
     .replace('\t', "\\t")
+}
+
+/// Escape a string for safe inclusion in an HTML attribute value.
+///
+/// This prevents attribute injection and malformed HTML when user-supplied
+/// strings (handler names, binding expressions, etc.) are embedded in
+/// `data-*` attributes. Applied **before** [`esc_rs`] so the generated
+/// Rust source emits valid, safe HTML at runtime.
+fn esc_html_attr(s: &str) -> String {
+  let mut out = String::with_capacity(s.len());
+  for c in s.chars() {
+    match c {
+      '&' => out.push_str("&amp;"),
+      '"' => out.push_str("&quot;"),
+      '\'' => out.push_str("&#x27;"),
+      '<' => out.push_str("&lt;"),
+      '>' => out.push_str("&gt;"),
+      _ => out.push(c),
+    }
+  }
+  out
 }
 
 /// Escape literal `{` and `}` for use inside a `format!` string.

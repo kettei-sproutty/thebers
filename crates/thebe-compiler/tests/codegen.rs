@@ -347,6 +347,16 @@ fn multiple_event_handlers() {
   assert!(code.contains(r#"data-on-mouseover=\"m\""#));
 }
 
+#[test]
+fn event_handler_html_escapes_special_chars() {
+  // A handler containing HTML-special characters must be escaped in the
+  // attribute value to prevent attribute injection / malformed HTML.
+  let code = codegen(r#"<button on:click="x&lt;y">Go</button>"#);
+  // & should become &amp; and < should become &lt; in the HTML output.
+  assert!(code.contains("&amp;"));
+  assert!(code.contains("&lt;"));
+}
+
 // ── Bindings (bind:prop) ────────────────────────────────────────────────
 
 #[test]
