@@ -100,6 +100,7 @@ fn to_pascal_case(s: &str) -> String {
 ///
 /// Returns an error if any `.trs` file fails to parse or compile,
 /// if file I/O fails, or if the output path fails the safety check.
+#[allow(clippy::too_many_lines)]
 pub fn emit_all(entries: &[RouteEntry], output_dir: &Path, force: bool) -> Result<()> {
   validate_output_dir(output_dir, force)?;
 
@@ -147,12 +148,16 @@ pub fn emit_all(entries: &[RouteEntry], output_dir: &Path, force: bool) -> Resul
     .collect();
 
   // Compile and write each entry as a module.
+  // Track which components each route module references (for style collection).
+  let mut component_refs: HashMap<PathBuf, Vec<String>> = HashMap::new();
   for entry in entries {
-    match entry.kind {
-      RouteKind::Component => {
-        compile_trs(entry, &comp_dir, &[], true)?;
+    if entry.kind == RouteKind::Component {
+      compile_trs(entry, &comp_dir, &[], true)?;
+    } else {
+      let refs = compile_trs(entry, &routes_dir, &component_infos, false)?;
+      if !refs.is_empty() {
+        component_refs.insert(entry.relative_path.clone(), refs);
       }
-      _ => compile_trs(entry, &routes_dir, &component_infos, false)?,
     }
   }
 
@@ -181,6 +186,46 @@ pub fn emit_all(entries: &[RouteEntry], output_dir: &Path, force: bool) -> Resul
   // Build layout lookup: directory path → module path.
   let layout_map = build_layout_map(&layouts);
 
+  // Build a mapping from layout directory → layout relative path, so we
+  // can look up which components a layout references.
+  let layout_source_map: HashMap<PathBuf, PathBuf> = layouts
+    .iter()
+    .map(|l| {
+      let dir = l.relative_path.parent().unwrap_or(Path::new("")).to_path_buf();
+      (dir, l.relative_path.clone())
+    })
+    .collect();
+
+  // Build per-page component sets: merge each page's own component refs
+  // with its layout's refs so only the actually-used styles are emitted.
+  let mut page_component_refs: HashMap<PathBuf, Vec<String>> = HashMap::new();
+  for page in &pages {
+    let mut used: Vec<String> = component_refs
+      .get(&page.relative_path)
+      .cloned()
+      .unwrap_or_default();
+
+    // Walk up to find the page's layout and merge its refs too.
+    if let Some(layout_segs) = find_layout_for_page(page, &layout_map) {
+      let layout_dir = layout_segs[..layout_segs.len() - 1]
+        .iter()
+        .fold(PathBuf::new(), |acc, seg| acc.join(seg));
+      if let Some(layout_rel) = layout_source_map.get(&layout_dir)
+        && let Some(layout_refs) = component_refs.get(layout_rel)
+      {
+        for r in layout_refs {
+          if !used.contains(r) {
+            used.push(r.clone());
+          }
+        }
+      }
+    }
+
+    if !used.is_empty() {
+      page_component_refs.insert(page.relative_path.clone(), used);
+    }
+  }
+
   // Find the root error page (if any).
   let root_error = errors.iter().find(|e| e.url_path == "/");
 
@@ -190,7 +235,8 @@ pub fn emit_all(entries: &[RouteEntry], output_dir: &Path, force: bool) -> Resul
     &pages,
     &layout_map,
     root_error.copied(),
-    &component_infos,
+    !component_infos.is_empty(),
+    &page_component_refs,
   )?;
 
   Ok(())
@@ -257,12 +303,15 @@ fn validate_output_dir(output_dir: &Path, force: bool) -> Result<()> {
 ///
 /// When `lowercase_leaf` is true, the leaf module filename is lowercased
 /// (used for component files to follow Rust naming conventions).
+///
+/// Returns the list of component **module names** that this entry
+/// references (empty for entries that don't use any components).
 fn compile_trs(
   entry: &RouteEntry,
   base_dir: &Path,
   component_infos: &[ComponentInfo],
   lowercase_leaf: bool,
-) -> Result<()> {
+) -> Result<Vec<String>> {
   let source = fs::read_to_string(&entry.source_path)
     .with_context(|| format!("reading {}", entry.source_path.display()))?;
   let filename = entry.relative_path.to_str().unwrap_or("<unknown>");
@@ -287,30 +336,30 @@ fn compile_trs(
   // Inject `use` imports for any component this module references.
   // The codegen emits `Alias::render()` (PascalCase tag name), so we match
   // on the alias and map it to the lowercase module name.
-  if !component_infos.is_empty() {
-    let referenced: Vec<&ComponentInfo> = component_infos
-      .iter()
-      .filter(|ci| code.contains(&format!("{}::render()", ci.alias)))
-      .collect();
+  let referenced: Vec<&ComponentInfo> = component_infos
+    .iter()
+    .filter(|ci| code.contains(&format!("{}::render()", ci.alias)))
+    .collect();
 
-    if !referenced.is_empty() {
-      // Module depth within `routes/`: segments give us how deep the module is
-      // within the directory tree. We need one extra `super::` to escape the
-      // `routes` module itself and reach the root where `components` lives.
-      let supers = "super::".repeat(entry.module_segments.len() + 1);
-      let mut imports = String::new();
-      for ci in &referenced {
-        writeln!(
-          imports,
-          "use {supers}components::{mod_name} as {alias};",
-          mod_name = ci.module_name,
-          alias = ci.alias,
-        )
-        .expect("write to String");
-      }
-      imports.push('\n');
-      code.insert_str(0, &imports);
+  let ref_module_names: Vec<String> = referenced.iter().map(|ci| ci.module_name.clone()).collect();
+
+  if !referenced.is_empty() {
+    // Module depth within `routes/`: segments give us how deep the module is
+    // within the directory tree. We need one extra `super::` to escape the
+    // `routes` module itself and reach the root where `components` lives.
+    let supers = "super::".repeat(entry.module_segments.len() + 1);
+    let mut imports = String::new();
+    for ci in &referenced {
+      writeln!(
+        imports,
+        "use {supers}components::{mod_name} as {alias};",
+        mod_name = ci.module_name,
+        alias = ci.alias,
+      )
+      .expect("write to String");
     }
+    imports.push('\n');
+    code.insert_str(0, &imports);
   }
 
   // Build target file path, creating intermediate directories.
@@ -331,7 +380,7 @@ fn compile_trs(
   fs::write(&file_path, &code)
     .with_context(|| format!("writing {}", file_path.display()))?;
 
-  Ok(())
+  Ok(ref_module_names)
 }
 
 // ---------------------------------------------------------------------------
@@ -467,9 +516,9 @@ fn emit_root_mod(
   pages: &[&RouteEntry],
   layout_map: &HashMap<PathBuf, Vec<String>>,
   root_error: Option<&RouteEntry>,
-  component_infos: &[ComponentInfo],
+  has_components: bool,
+  component_refs: &HashMap<PathBuf, Vec<String>>,
 ) -> Result<()> {
-  let has_components = !component_infos.is_empty();
   let mut code = String::from("// Auto-generated by thebe. Do not edit.\n");
   code.push_str("#![allow(clippy::all, unused)]\n\n");
   code.push_str("pub mod routes;\nmod shell;\n");
@@ -569,13 +618,16 @@ fn emit_root_mod(
       )
       .expect("write to String");
     }
-    for ci in component_infos {
-      writeln!(
-        code,
-        "  all_styles.extend_from_slice(components::{}::STYLES);",
-        ci.module_name,
-      )
-      .expect("write to String");
+    // Collect component styles only for components actually used by this
+    // page and its layout.
+    if let Some(used) = component_refs.get(&page.relative_path) {
+      for comp_mod in used {
+        writeln!(
+          code,
+          "  all_styles.extend_from_slice(components::{comp_mod}::STYLES);",
+        )
+        .expect("write to String");
+      }
     }
 
     writeln!(
