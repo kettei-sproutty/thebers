@@ -31,11 +31,23 @@ use crate::discover::RouteKind;
 
 /// Compile all entries and write generated code to `output_dir`.
 ///
+/// # Safety guard
+///
+/// The output directory is wiped before writing. To prevent accidental
+/// data loss the path must satisfy **all** of the following:
+///
+/// 1. It is **not** an absolute path.
+/// 2. It is **not** empty, `.`, `..`, or `/`.
+/// 3. Its final component starts with a dot (e.g. `.thebe`), **or**
+///    `force` is `true`.
+///
 /// # Errors
 ///
 /// Returns an error if any `.trs` file fails to parse or compile,
-/// or if file I/O fails.
-pub fn emit_all(entries: &[RouteEntry], output_dir: &Path) -> Result<()> {
+/// if file I/O fails, or if the output path fails the safety check.
+pub fn emit_all(entries: &[RouteEntry], output_dir: &Path, force: bool) -> Result<()> {
+  validate_output_dir(output_dir, force)?;
+
   // Clean and recreate output directory.
   if output_dir.exists() {
     fs::remove_dir_all(output_dir)?;
@@ -124,6 +136,54 @@ pub fn emit_all(entries: &[RouteEntry], output_dir: &Path) -> Result<()> {
     root_error.copied(),
     &component_names,
   )?;
+
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Output directory validation
+// ---------------------------------------------------------------------------
+
+/// Validate that the output path is safe to wipe.
+///
+/// Works on both relative and resolved (absolute) paths. Checks:
+/// 1. The path has a final component (not empty or `/`).
+/// 2. That component is not `.` or `..`.
+/// 3. The path has at least two components (prevents wiping mount roots).
+/// 4. Unless `force` is set, the final component starts with `.` (dotdir).
+fn validate_output_dir(output_dir: &Path, force: bool) -> Result<()> {
+  let dir_name = output_dir
+    .file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("");
+
+  anyhow::ensure!(
+    !dir_name.is_empty(),
+    "output directory must not be a filesystem root or empty path",
+  );
+
+  anyhow::ensure!(
+    dir_name != "." && dir_name != "..",
+    "output directory must not be `.` or `..`",
+  );
+
+  // An absolute path with only one real component (e.g. `/tmp`) is dangerous.
+  // A relative dot-prefixed path (`.thebe`) is fine even with one component.
+  if output_dir.is_absolute() {
+    anyhow::ensure!(
+      output_dir.components().count() >= 3,
+      "absolute output path is too shallow; refusing to wipe `{}`",
+      output_dir.display(),
+    );
+  }
+
+  if !force {
+    anyhow::ensure!(
+      dir_name.starts_with('.'),
+      "output directory name `{dir_name}` does not start with a dot; \
+       use a dot-prefixed name (e.g. `.thebe`) or pass --force",
+    );
+  }
 
   Ok(())
 }
@@ -645,5 +705,63 @@ mod tests {
       kind,
       params: Vec::new(),
     }
+  }
+
+  // ── Output directory validation ─────────────────────────────────────
+
+  #[test]
+  fn validate_rejects_root() {
+    assert!(validate_output_dir(Path::new("/"), false).is_err());
+  }
+
+  #[test]
+  fn validate_rejects_dot() {
+    assert!(validate_output_dir(Path::new("."), false).is_err());
+  }
+
+  #[test]
+  fn validate_rejects_dotdot() {
+    assert!(validate_output_dir(Path::new(".."), false).is_err());
+  }
+
+  #[test]
+  fn validate_rejects_shallow_absolute() {
+    // Single-component absolute path like `/tmp`.
+    assert!(validate_output_dir(Path::new("/tmp"), false).is_err());
+  }
+
+  #[test]
+  fn validate_rejects_non_dot_without_force() {
+    assert!(validate_output_dir(Path::new("project/generated"), false).is_err());
+  }
+
+  #[test]
+  fn validate_accepts_dot_prefixed_relative() {
+    assert!(validate_output_dir(Path::new("project/.thebe"), false).is_ok());
+  }
+
+  #[test]
+  fn validate_accepts_plain_relative() {
+    assert!(validate_output_dir(Path::new(".thebe"), false).is_ok());
+  }
+
+  #[test]
+  fn validate_accepts_non_dot_with_force() {
+    assert!(validate_output_dir(Path::new("project/generated"), true).is_ok());
+  }
+
+  #[test]
+  fn validate_accepts_deep_absolute_dot() {
+    assert!(validate_output_dir(Path::new("/Users/x/project/.thebe"), false).is_ok());
+  }
+
+  #[test]
+  fn validate_rejects_deep_absolute_no_dot() {
+    assert!(validate_output_dir(Path::new("/Users/x/project/out"), false).is_err());
+  }
+
+  #[test]
+  fn validate_accepts_deep_absolute_force() {
+    assert!(validate_output_dir(Path::new("/Users/x/project/out"), true).is_ok());
   }
 }

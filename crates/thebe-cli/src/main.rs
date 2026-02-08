@@ -32,6 +32,10 @@ enum Command {
     /// Output directory for generated code.
     #[arg(long, default_value = ".thebe")]
     output: PathBuf,
+
+    /// Allow a non-dot-prefixed output directory (e.g. `generated`).
+    #[arg(long, default_value_t = false)]
+    force: bool,
   },
 }
 
@@ -43,6 +47,7 @@ fn main() -> Result<()> {
       routes,
       components,
       output,
+      force,
     } => {
       let cwd = std::env::current_dir()?;
       let routes_dir = cwd.join(&routes);
@@ -78,7 +83,7 @@ fn main() -> Result<()> {
         );
       }
 
-      emit::emit_all(&entries, &output_dir)
+      emit::emit_all(&entries, &output_dir, force)
         .context("emitting generated code")?;
 
       println!(
