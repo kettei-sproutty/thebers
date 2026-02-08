@@ -108,6 +108,13 @@ fn diag_info(error: &ParseError) -> DiagInfo {
       note: None,
       help: Some("add a closing {/each} tag"),
     },
+    ParseError::UnclosedRawHtml { span } => DiagInfo {
+      range: span.start..span.end,
+      message: "unclosed {@html} block",
+      label: "{@html opened here has no matching }".into(),
+      note: None,
+      help: Some("add a closing } brace"),
+    },
     ParseError::InvalidEachExpression { detail, span } => DiagInfo {
       range: span.start..span.end,
       message: "invalid {#each} expression",

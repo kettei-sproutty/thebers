@@ -1667,3 +1667,63 @@ fn rejects_tag_name_with_backslash() {
   let result = thebe_ast::parse_html(r#"<div\>x</div\>"#, 0);
   assert!(matches!(result, Err(ParseError::MalformedTag { .. })));
 }
+
+// ── {@html} raw HTML injection ──────────────────────────────────────────
+
+#[test]
+fn raw_html_parsed() {
+  let nodes = thebe_ast::parse_html("{@html content}", 0).unwrap();
+  assert_eq!(nodes.len(), 1);
+  let HtmlNode::RawHtml { expr, .. } = &nodes[0] else {
+    panic!("expected RawHtml, got {:?}", nodes[0]);
+  };
+  assert_eq!(expr, "content");
+}
+
+#[test]
+fn raw_html_trims_whitespace() {
+  let nodes = thebe_ast::parse_html("{@html   some_expr  }", 0).unwrap();
+  let HtmlNode::RawHtml { expr, .. } = &nodes[0] else {
+    panic!("expected RawHtml");
+  };
+  assert_eq!(expr, "some_expr");
+}
+
+#[test]
+fn raw_html_inside_element() {
+  let nodes = thebe_ast::parse_html("<div>{@html body}</div>", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else { panic!("expected Element") };
+  assert_eq!(el.children.len(), 1);
+  assert!(matches!(&el.children[0], HtmlNode::RawHtml { expr, .. } if expr == "body"));
+}
+
+#[test]
+fn raw_html_with_complex_expression() {
+  let nodes = thebe_ast::parse_html("{@html render_md(&text)}", 0).unwrap();
+  let HtmlNode::RawHtml { expr, .. } = &nodes[0] else {
+    panic!("expected RawHtml");
+  };
+  assert_eq!(expr, "render_md(&text)");
+}
+
+#[test]
+fn raw_html_unclosed_is_error() {
+  let result = thebe_ast::parse_html("{@html oops", 0);
+  assert!(matches!(result, Err(ParseError::UnclosedRawHtml { .. })));
+}
+
+#[test]
+fn raw_html_span_covers_full_block() {
+  let nodes = thebe_ast::parse_html("{@html x}", 0).unwrap();
+  let HtmlNode::RawHtml { span, .. } = &nodes[0] else { panic!("expected RawHtml") };
+  assert_eq!(span.start, 0);
+  assert_eq!(span.end, "{@html x}".len());
+}
+
+#[test]
+fn raw_html_alongside_text_and_expr() {
+  let nodes = thebe_ast::parse_html("hello {@html mid} {{ end }}", 0).unwrap();
+  assert_eq!(nodes.len(), 4); // text, raw_html, text(space), expr
+  assert!(matches!(&nodes[0], HtmlNode::Text(t) if t == "hello "));
+  assert!(matches!(&nodes[1], HtmlNode::RawHtml { expr, .. } if expr == "mid"));
+}

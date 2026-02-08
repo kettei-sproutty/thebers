@@ -187,6 +187,10 @@ fn lower_node(node: &HtmlNode) -> Result<IrNode, CompileError> {
       children,
       span,
     } => Ok(IrNode::Slot(lower_slot(name.as_ref(), children, *span)?)),
+    HtmlNode::RawHtml { expr, span } => Ok(IrNode::RawHtml(IrExpr {
+      expr: expr.clone(),
+      span: *span,
+    })),
   }
 }
 

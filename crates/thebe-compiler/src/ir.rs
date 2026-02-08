@@ -82,6 +82,8 @@ pub enum IrNode {
   Component(IrComponentRef),
   /// A `<slot>` element for composition.
   Slot(IrSlot),
+  /// A raw HTML injection `{@html expr}` — emitted without escaping.
+  RawHtml(IrExpr),
 }
 
 /// A lowered HTML element with directives split into typed fields.

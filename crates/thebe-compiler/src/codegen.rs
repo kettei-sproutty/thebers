@@ -223,6 +223,13 @@ impl Emitter {
       IrNode::Each(each) => self.emit_each(each),
       IrNode::Component(comp) => self.emit_component(comp),
       IrNode::Slot(slot) => self.emit_slot(slot),
+      IrNode::RawHtml(e) => {
+        // Inject the expression result without HTML-escaping.
+        self.line(&format!(
+          "__html.push_str(&format!(\"{{}}\", {{ {} }}));",
+          e.expr
+        ));
+      }
     }
   }
 
@@ -730,7 +737,7 @@ fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {
       IrNode::Each(each) => {
         collect_named_slots_inner(&each.children, out);
       }
-      IrNode::Text(_) | IrNode::Expr(_) => {}
+      IrNode::Text(_) | IrNode::Expr(_) | IrNode::RawHtml(_) => {}
     }
   }
 }

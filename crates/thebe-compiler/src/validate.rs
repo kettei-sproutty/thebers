@@ -54,6 +54,7 @@ impl ValidationCtx {
       IrNode::Element(el) => self.validate_element(el),
       IrNode::Component(comp) => self.validate_component(comp),
       IrNode::Expr(e) => self.check_empty_expr(&e.expr, e.span),
+      IrNode::RawHtml(e) => self.check_empty_expr(&e.expr, e.span),
       IrNode::If(ib) => {
         for branch in &ib.branches {
           self.validate_nodes(&branch.children);

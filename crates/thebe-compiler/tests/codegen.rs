@@ -693,3 +693,37 @@ fn scoped_css_global_with_child_combinator() {
   assert!(code.contains("> .child"));
   assert!(!code.contains(".child[data-s-"));
 }
+
+// ── Raw HTML injection ({@html}) ────────────────────────────────────────
+
+#[test]
+fn raw_html_injection() {
+  let code = codegen("<div>{@html content}</div>");
+  // Raw HTML should NOT use __esc — content is injected directly.
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { content }));"));
+  // The push_str for the raw html should not use __esc.
+  // (The __esc function definition is still present for other uses.)
+  assert!(!code.contains("__esc(&format!(\"{}\", { content }))"));
+}
+
+#[test]
+fn raw_html_with_complex_expr() {
+  let code = codegen("<div>{@html markdown_to_html(&body)}</div>");
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { markdown_to_html(&body) }));"));
+}
+
+#[test]
+fn raw_html_alongside_escaped_expr() {
+  let code = codegen("<div>{{ safe }} {@html raw}</div>");
+  // The {{ safe }} should use __esc.
+  assert!(code.contains("__esc(&format!(\"{}\", { safe }))"));
+  // The {@html raw} should not.
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { raw }));"));
+}
+
+#[test]
+fn raw_html_in_if_block() {
+  let code = codegen("{#if show}{@html content}{/if}");
+  assert!(code.contains("if show {"));
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { content }));"));
+}

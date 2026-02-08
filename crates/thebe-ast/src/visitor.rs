@@ -119,7 +119,7 @@ pub fn walk_template_fragment<V: Visitor + ?Sized>(v: &mut V, frag: &TemplateFra
 pub fn walk_html_node<V: Visitor + ?Sized>(v: &mut V, node: &HtmlNode) {
   match node {
     HtmlNode::Element(el) | HtmlNode::Component(el) => v.visit_element(el),
-    HtmlNode::Text(_) | HtmlNode::Expr { .. } => {}
+    HtmlNode::Text(_) | HtmlNode::Expr { .. } | HtmlNode::RawHtml { .. } => {}
     HtmlNode::If { branches, .. } => {
       for branch in branches {
         v.visit_if_branch(branch);
