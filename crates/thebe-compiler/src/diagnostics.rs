@@ -328,6 +328,15 @@ fn warn_diag_info(warning: &ValidationWarning) -> WarnDiagInfo {
       first_range: None,
       help: Some("class: and style: directives only work on HTML elements, not components"),
     },
+    ValidationWarning::InvalidSlotAttribute {
+      tag, reason, span,
+    } => WarnDiagInfo {
+      range: span.start..span.end,
+      message: "invalid slot attribute",
+      label: format!("on <{tag}>: {reason}"),
+      first_range: None,
+      help: Some("slot must be a static string like slot=\"header\""),
+    },
   }
 }
 

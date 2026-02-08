@@ -777,8 +777,13 @@ fn partition_slot_children(children: &[IrNode]) -> (Vec<&IrNode>, Vec<(String, V
   (default_children, named_groups)
 }
 
-/// If `node` is an element or component with a `slot="name"` attribute,
+/// If `node` is an element or component with a valid `slot="name"` attribute,
 /// return the slot name.
+///
+/// A valid slot attribute must be exactly one `TemplateNode::Text` segment
+/// whose trimmed value is non-empty. Dynamic values (expressions), empty
+/// strings, and multi-segment values are not valid slot targets and return
+/// `None` (the validation pass emits a warning for these cases).
 fn get_slot_attr(node: &IrNode) -> Option<String> {
   let attrs = match node {
     IrNode::Element(el) => &el.attributes,
@@ -786,12 +791,23 @@ fn get_slot_attr(node: &IrNode) -> Option<String> {
     _ => return None,
   };
 
-  attrs.iter().find(|a| a.name == "slot").and_then(|a| {
-    a.value.first().and_then(|v| match v {
-      TemplateNode::Text(t) => Some(t.clone()),
-      TemplateNode::Expr { .. } => None,
-    })
-  })
+  let slot_attr = attrs.iter().find(|a| a.name == "slot")?;
+
+  // Must be exactly one segment and that segment must be static text.
+  if slot_attr.value.len() != 1 {
+    return None;
+  }
+  match &slot_attr.value[0] {
+    TemplateNode::Text(t) => {
+      let trimmed = t.trim();
+      if trimmed.is_empty() {
+        None
+      } else {
+        Some(trimmed.to_string())
+      }
+    }
+    TemplateNode::Expr { .. } => None,
+  }
 }
 
 fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {

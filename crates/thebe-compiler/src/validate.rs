@@ -10,6 +10,7 @@ use thebe_ast::Span;
 
 use crate::ir::CompiledComponent;
 use crate::ir::EventModifier;
+use crate::ir::IrAttribute;
 use crate::ir::IrComponentRef;
 use crate::ir::IrElement;
 use crate::ir::IrNode;
@@ -81,6 +82,7 @@ impl ValidationCtx {
     self.check_empty_style_prop_values(&el.style_props);
     self.check_empty_class_toggle_conditions(&el.class_toggles);
     self.check_empty_binding_expressions(&el.bindings);
+    self.check_slot_attribute(&el.tag, &el.attributes);
     self.validate_nodes(&el.children);
   }
 
@@ -93,6 +95,7 @@ impl ValidationCtx {
     self.check_empty_binding_expressions(&comp.bindings);
     self.check_empty_component_props(comp);
     self.check_directives_on_component(comp);
+    self.check_slot_attribute(&comp.name, &comp.props);
     self.validate_nodes(&comp.children);
   }
 
@@ -344,6 +347,45 @@ impl ValidationCtx {
           directive: format!("style:{}", prop.property),
           component: comp.name.clone(),
           span: prop.span,
+        });
+    }
+  }
+
+  // ── Slot attribute checks ──────────────────────────────────────────
+
+  /// Validate that a `slot` attribute (if present) has a single, static,
+  /// non-empty text value. Dynamic values, empty strings, whitespace-only
+  /// values, and multi-segment values are flagged.
+  fn check_slot_attribute(&mut self, tag: &str, attrs: &[IrAttribute]) {
+    let Some(slot_attr) = attrs.iter().find(|a| a.name == "slot") else {
+      return;
+    };
+
+    let reason = if slot_attr.value.is_empty() {
+      // Boolean `slot` (no `=`) — not meaningful.
+      Some("slot attribute requires a value (e.g. slot=\"header\")")
+    } else if slot_attr.value.len() > 1 {
+      // Mixed segments like slot="head{{x}}"
+      Some("slot attribute must be a static string, not a dynamic expression")
+    } else {
+      match &slot_attr.value[0] {
+        thebe_ast::TemplateNode::Text(t) if t.trim().is_empty() => {
+          Some("slot attribute value must not be empty")
+        }
+        thebe_ast::TemplateNode::Expr { .. } => {
+          Some("slot attribute must be a static string, not a dynamic expression")
+        }
+        thebe_ast::TemplateNode::Text(_) => None,
+      }
+    };
+
+    if let Some(reason) = reason {
+      self
+        .warnings
+        .push(ValidationWarning::InvalidSlotAttribute {
+          tag: tag.to_string(),
+          reason: reason.to_string(),
+          span: slot_attr.span,
         });
     }
   }

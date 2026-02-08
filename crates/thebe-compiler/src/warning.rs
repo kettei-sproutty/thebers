@@ -174,6 +174,19 @@ pub enum ValidationWarning {
     /// Span of the directive.
     span: Span,
   },
+
+  /// A `slot` attribute has an invalid value — it must be a single, static,
+  /// non-empty text value (e.g. `slot="header"`). Dynamic expressions,
+  /// empty strings, and multi-segment values are not allowed.
+  #[error("invalid slot attribute on <{tag}> at byte {}", span.start)]
+  InvalidSlotAttribute {
+    /// The tag or component name.
+    tag: String,
+    /// Human-readable reason.
+    reason: String,
+    /// Span of the `slot` attribute.
+    span: Span,
+  },
 }
 
 impl ValidationWarning {
@@ -196,7 +209,8 @@ impl ValidationWarning {
       | Self::EmptyClassToggleCondition { span, .. }
       | Self::EmptyBindingExpression { span, .. }
       | Self::EmptyComponentProp { span, .. }
-      | Self::DirectiveOnComponent { span, .. } => *span,
+      | Self::DirectiveOnComponent { span, .. }
+      | Self::InvalidSlotAttribute { span, .. } => *span,
     }
   }
 }

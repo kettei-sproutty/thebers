@@ -306,3 +306,67 @@ fn multiple_component_prop_issues() {
   // 1 empty prop + 1 class directive + 1 style directive = 3 warnings
   assert_eq!(w.len(), 3, "expected 3 warnings, got: {w:?}");
 }
+
+// ── Invalid slot attributes ─────────────────────────────────────────────
+
+#[test]
+fn valid_static_slot_attribute_no_warning() {
+  let w = warnings(r#"<Card><div slot="header">title</div></Card>"#);
+  assert!(w.is_empty(), "expected no warnings, got: {w:?}");
+}
+
+#[test]
+fn empty_slot_attribute_warns() {
+  let w = warnings(r#"<Card><div slot="">content</div></Card>"#);
+  assert_eq!(w.len(), 1, "expected 1 warning, got: {w:?}");
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::InvalidSlotAttribute { tag, .. }
+    if tag == "div"
+  ));
+}
+
+#[test]
+fn dynamic_slot_attribute_warns() {
+  let w = warnings(r#"<Card><div slot="{{ name }}">content</div></Card>"#);
+  assert_eq!(w.len(), 1, "expected 1 warning, got: {w:?}");
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::InvalidSlotAttribute { tag, .. }
+    if tag == "div"
+  ));
+}
+
+#[test]
+fn mixed_slot_attribute_warns() {
+  let w = warnings(r#"<Card><div slot="head{{ x }}">content</div></Card>"#);
+  assert_eq!(w.len(), 1, "expected 1 warning, got: {w:?}");
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::InvalidSlotAttribute { tag, .. }
+    if tag == "div"
+  ));
+}
+
+#[test]
+fn boolean_slot_attribute_warns() {
+  // `slot` with no value (boolean style) is invalid — must have a name.
+  let w = warnings(r#"<Card><div slot>content</div></Card>"#);
+  assert_eq!(w.len(), 1, "expected 1 warning, got: {w:?}");
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::InvalidSlotAttribute { tag, .. }
+    if tag == "div"
+  ));
+}
+
+#[test]
+fn whitespace_only_slot_attribute_warns() {
+  let w = warnings(r#"<Card><div slot="  ">content</div></Card>"#);
+  assert_eq!(w.len(), 1, "expected 1 warning, got: {w:?}");
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::InvalidSlotAttribute { tag, .. }
+    if tag == "div"
+  ));
+}

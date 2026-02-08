@@ -504,6 +504,27 @@ fn component_with_no_named_slots() {
 }
 
 #[test]
+fn dynamic_slot_attribute_treated_as_default() {
+  // A dynamic slot attribute like slot="{{ name }}" is not valid for
+  // named slot routing — the child should fall into the default slot.
+  let code = codegen(r#"<Card><div slot="{{ name }}">dynamic</div><p>body</p></Card>"#);
+  // Both <div> and <p> should end up in the default slot content (no named slot render var).
+  assert!(
+    !code.contains("__comp_slot_"),
+    "dynamic slot attribute should not create a named slot variable"
+  );
+}
+
+#[test]
+fn empty_slot_attribute_treated_as_default() {
+  let code = codegen(r#"<Card><div slot="">content</div></Card>"#);
+  assert!(
+    !code.contains("__comp_slot_"),
+    "empty slot attribute should not create a named slot variable"
+  );
+}
+
+#[test]
 fn named_slot_declaration_deduplicated() {
   // Two slots with the same name should produce only one `let` declaration
   // per render function (render + render_with_slot = 2 total).
