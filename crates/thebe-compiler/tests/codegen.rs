@@ -2,7 +2,7 @@
 fn codegen(source: &str) -> String {
   let ast = thebe_ast::parse(source).unwrap();
   let ir = thebe_compiler::lower(source, &ast).unwrap();
-  thebe_compiler::generate(&ir, &[])
+  thebe_compiler::generate(&ir, &[]).unwrap()
 }
 
 /// Helper: parse → lower → generate with route params.
@@ -10,7 +10,7 @@ fn codegen_with_params(source: &str, params: &[&str]) -> String {
   let ast = thebe_ast::parse(source).unwrap();
   let ir = thebe_compiler::lower(source, &ast).unwrap();
   let params: Vec<String> = params.iter().map(|s| (*s).to_string()).collect();
-  thebe_compiler::generate(&ir, &params)
+  thebe_compiler::generate(&ir, &params).unwrap()
 }
 
 // ── Simple elements ─────────────────────────────────────────────────────
