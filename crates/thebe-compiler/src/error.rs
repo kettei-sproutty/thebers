@@ -16,6 +16,15 @@ pub enum CompileError {
     /// Byte-offset span of the directive carrying the modifier.
     span: Span,
   },
+
+  /// Scoped CSS could not be parsed or re-serialised.
+  #[error("failed to scope CSS: {reason}")]
+  CssScopeError {
+    /// Human-readable description of why CSS scoping failed.
+    reason: String,
+    /// Byte-offset span of the `<style scoped>` block.
+    span: Span,
+  },
 }
 
 impl CompileError {
@@ -25,6 +34,7 @@ impl CompileError {
     match self {
       CompileError::Parse(e) => e.span(),
       CompileError::UnknownEventModifier { span, .. } => Some(*span),
+      CompileError::CssScopeError { span, .. } => Some(*span),
     }
   }
 }

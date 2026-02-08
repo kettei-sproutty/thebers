@@ -331,7 +331,10 @@ fn compile_trs(
     let _ = thebe_compiler::diagnostics::eprint_warning(w, &source, Some(filename));
   }
 
-  let mut code = thebe_compiler::generate(&ir, &entry.params);
+  let mut code = thebe_compiler::generate(&ir, &entry.params).map_err(|e| {
+    let _ = thebe_compiler::diagnostics::eprint_error(&e, &source, Some(filename));
+    anyhow::anyhow!("codegen error in {filename}")
+  })?;
 
   // Inject `use` imports for any component this module references.
   // The codegen emits `Alias::render()` (PascalCase tag name), so we match

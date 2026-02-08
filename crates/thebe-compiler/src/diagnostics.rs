@@ -50,6 +50,13 @@ fn diag_info(error: &CompileError) -> DiagInfo {
         "known modifiers: preventDefault, stopPropagation, once, capture, self, trusted, passive, nonpassive",
       ),
     },
+    CompileError::CssScopeError { reason, span } => DiagInfo {
+      range: span.start..span.end,
+      message: "CSS scoping failed",
+      label: reason.clone(),
+      note: Some("scoped styles require valid CSS so selectors can be rewritten"),
+      help: Some("check for syntax errors in this <style scoped> block"),
+    },
   }
 }
 

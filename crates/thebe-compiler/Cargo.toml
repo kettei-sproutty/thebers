@@ -11,3 +11,5 @@ workspace = true
 thebe-ast = { path = "../thebe-ast" }
 thiserror = "2.0.18"
 ariadne = "0.6.0"
+lightningcss = { version = "1.0.0-alpha.70", default-features = false, features = ["visitor", "into_owned"] }
+cssparser = "0.33"
