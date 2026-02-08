@@ -2,7 +2,15 @@
 fn codegen(source: &str) -> String {
   let ast = thebe_ast::parse(source).unwrap();
   let ir = thebe_compiler::lower(source, &ast).unwrap();
-  thebe_compiler::generate(&ir)
+  thebe_compiler::generate(&ir, &[])
+}
+
+/// Helper: parse → lower → generate with route params.
+fn codegen_with_params(source: &str, params: &[&str]) -> String {
+  let ast = thebe_ast::parse(source).unwrap();
+  let ir = thebe_compiler::lower(source, &ast).unwrap();
+  let params: Vec<String> = params.iter().map(|s| (*s).to_string()).collect();
+  thebe_compiler::generate(&ir, &params)
 }
 
 // ── Simple elements ─────────────────────────────────────────────────────
@@ -264,4 +272,47 @@ h1 { color: blue; }
 
   // Escape function present.
   assert!(code.contains("fn __esc("));
+}
+
+// ── Route params ────────────────────────────────────────────────────────
+
+#[test]
+fn render_with_no_params() {
+  let code = codegen("<div>x</div>");
+  assert!(code.contains("pub fn render() -> String {"));
+  assert!(code.contains("pub fn render_with_slot(__slot: &str) -> String {"));
+}
+
+#[test]
+fn render_with_single_param() {
+  let code = codegen_with_params("<p>{{ slug }}</p>", &["slug"]);
+  assert!(code.contains("pub fn render(slug: &str) -> String {"));
+  assert!(code.contains("pub fn render_with_slot(__slot: &str, slug: &str) -> String {"));
+}
+
+#[test]
+fn render_with_multiple_params() {
+  let code = codegen_with_params("<p>{{ org }}/{{ repo }}</p>", &["org", "repo"]);
+  assert!(code.contains("pub fn render(org: &str, repo: &str) -> String {"));
+  assert!(code.contains(
+    "pub fn render_with_slot(__slot: &str, org: &str, repo: &str) -> String {"
+  ));
+}
+
+#[test]
+fn param_used_in_expression() {
+  let code = codegen_with_params("<h1>{{ slug }}</h1>", &["slug"]);
+  assert!(code.contains(r#"__esc(&format!("{}", { slug }))"#));
+}
+
+#[test]
+fn param_with_setup_block() {
+  let source = r#"<script setup>
+let upper = slug.to_uppercase();
+</script>
+
+<h1>{{ upper }}</h1>"#;
+  let code = codegen_with_params(source, &["slug"]);
+  assert!(code.contains("pub fn render(slug: &str) -> String {"));
+  assert!(code.contains("let upper = slug.to_uppercase();"));
 }

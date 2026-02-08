@@ -331,7 +331,7 @@ fn compile_trs(
     let _ = thebe_compiler::diagnostics::eprint_warning(w, &source, Some(filename));
   }
 
-  let mut code = thebe_compiler::generate(&ir);
+  let mut code = thebe_compiler::generate(&ir, &entry.params);
 
   // Inject `use` imports for any component this module references.
   // The codegen emits `Alias::render()` (PascalCase tag name), so we match
@@ -589,8 +589,19 @@ fn emit_root_mod(
     }
 
     // Render the page body.
-    writeln!(code, "  let body = routes::{mod_path}::render();")
-      .expect("write to String");
+    if page.params.is_empty() {
+      writeln!(code, "  let body = routes::{mod_path}::render();")
+        .expect("write to String");
+    } else {
+      let args = page
+        .params
+        .iter()
+        .map(|p| format!("&{p}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+      writeln!(code, "  let body = routes::{mod_path}::render({args});")
+        .expect("write to String");
+    }
 
     // Wrap in layout if one exists.
     if let Some(layout_segs) = &layout_mod {
