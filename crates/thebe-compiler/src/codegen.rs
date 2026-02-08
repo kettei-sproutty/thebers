@@ -340,10 +340,18 @@ impl Emitter {
   /// }
   /// ```
   fn emit_class_toggles(&mut self, toggles: &[IrClassToggle]) {
+    // Filter out toggles with empty conditions — they would produce invalid Rust.
+    let valid: Vec<_> = toggles
+      .iter()
+      .filter(|t| !t.condition.trim().is_empty())
+      .collect();
+    if valid.is_empty() {
+      return;
+    }
     self.line("{");
     self.indent();
     self.line("let mut __classes = Vec::new();");
-    for toggle in toggles {
+    for toggle in &valid {
       self.line(&format!(
         "if {} {{ __classes.push(\"{}\"); }}",
         toggle.condition, toggle.class
@@ -372,8 +380,13 @@ impl Emitter {
   /// __html.push_str("\"");
   /// ```
   fn emit_style_props(&mut self, props: &[IrStyleProp]) {
+    // Filter out props with empty values — they would produce invalid Rust.
+    let valid: Vec<_> = props.iter().filter(|p| !p.value.trim().is_empty()).collect();
+    if valid.is_empty() {
+      return;
+    }
     self.line("__html.push_str(\" style=\\\"\");");
-    for (i, prop) in props.iter().enumerate() {
+    for (i, prop) in valid.iter().enumerate() {
       if i > 0 {
         self.line("__html.push_str(\"; \");");
       }

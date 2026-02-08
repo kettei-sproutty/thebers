@@ -616,3 +616,28 @@ fn scoped_css_mixed_rules_and_at_rules() {
   assert!(code.contains(".c[data-s-"));
   assert!(code.contains("@media print"));
 }
+
+// ── Empty directive value guards ────────────────────────────────────────
+
+#[test]
+fn empty_style_prop_value_skipped() {
+  let code = codegen(r#"<div style:color="">text</div>"#);
+  // Empty style prop should be silently skipped — no style attribute at all.
+  assert!(!code.contains("style="));
+}
+
+#[test]
+fn empty_class_toggle_condition_skipped() {
+  let code = codegen(r#"<div class:active="">text</div>"#);
+  // Empty condition should be silently skipped — no __classes block.
+  assert!(!code.contains("__classes"));
+}
+
+#[test]
+fn mixed_empty_and_valid_style_props() {
+  let code = codegen(r#"<div style:color="" style:background="bg">text</div>"#);
+  // Only the valid prop should appear.
+  assert!(code.contains("style="));
+  assert!(code.contains("background"));
+  assert!(!code.contains("color"));
+}

@@ -261,6 +261,27 @@ fn warn_diag_info(warning: &ValidationWarning) -> WarnDiagInfo {
       first_range: None,
       help: Some("provide a handler expression, e.g. on:click=\"handle_click\""),
     },
+    ValidationWarning::EmptyStylePropValue { property, span } => WarnDiagInfo {
+      range: span.start..span.end,
+      message: "empty style prop value",
+      label: format!("'style:{property}' has no value expression"),
+      first_range: None,
+      help: Some("provide a value expression, e.g. style:color=\"theme_color\""),
+    },
+    ValidationWarning::EmptyClassToggleCondition { class, span } => WarnDiagInfo {
+      range: span.start..span.end,
+      message: "empty class toggle condition",
+      label: format!("'class:{class}' has no condition"),
+      first_range: None,
+      help: Some("provide a condition expression, e.g. class:active=\"is_active\""),
+    },
+    ValidationWarning::EmptyBindingExpression { property, span } => WarnDiagInfo {
+      range: span.start..span.end,
+      message: "empty binding expression",
+      label: format!("'bind:{property}' has no expression"),
+      first_range: None,
+      help: Some("provide a binding expression, e.g. bind:value=\"name\""),
+    },
     ValidationWarning::MultipleDefaultSlots {
       first_span,
       dup_span,

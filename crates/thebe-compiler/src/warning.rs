@@ -105,6 +105,33 @@ pub enum ValidationWarning {
     span: Span,
   },
 
+  /// A style prop has an empty value expression (e.g. `style:color=""`).
+  #[error("empty value for 'style:{property}' at byte {}", span.start)]
+  EmptyStylePropValue {
+    /// The CSS property name.
+    property: String,
+    /// Span of the directive.
+    span: Span,
+  },
+
+  /// A class toggle has an empty condition (e.g. `class:active=""`).
+  #[error("empty condition for 'class:{class}' at byte {}", span.start)]
+  EmptyClassToggleCondition {
+    /// The CSS class name.
+    class: String,
+    /// Span of the directive.
+    span: Span,
+  },
+
+  /// A binding has an empty expression (e.g. `bind:value=""`).
+  #[error("empty expression for 'bind:{property}' at byte {}", span.start)]
+  EmptyBindingExpression {
+    /// The property name.
+    property: String,
+    /// Span of the directive.
+    span: Span,
+  },
+
   /// More than one unnamed `<slot />` (default slot) in a component.
   #[error("multiple default slots at byte {}", dup_span.start)]
   MultipleDefaultSlots {
@@ -141,7 +168,10 @@ impl ValidationWarning {
       Self::ConflictingPassivePreventDefault { span, .. }
       | Self::ConflictingPassiveNonPassive { span, .. }
       | Self::EmptyExpression { span }
-      | Self::EmptyEventHandler { span, .. } => *span,
+      | Self::EmptyEventHandler { span, .. }
+      | Self::EmptyStylePropValue { span, .. }
+      | Self::EmptyClassToggleCondition { span, .. }
+      | Self::EmptyBindingExpression { span, .. } => *span,
     }
   }
 }
