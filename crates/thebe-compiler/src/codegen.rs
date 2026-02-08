@@ -782,233 +782,71 @@ fn esc_fmt(s: &str) -> String {
 
 /// Rewrite CSS selectors to include a scoped attribute selector.
 ///
-/// Appends `[data-SCOPE_ID]` to each selector so that styles only
-/// apply to elements rendered by this component (which carry the
-/// corresponding `data-s-XXXXXXXX` attribute).
-///
-/// This is a lightweight rewriter that handles common cases:
-/// - Simple selectors: `.card` → `.card[data-s-abcdef01]`
-/// - Compound selectors: `div.card` → `div.card[data-s-abcdef01]`
-/// - Combinators: `.card > p` → `.card[data-s-abcdef01] > p[data-s-abcdef01]`
-/// - Pseudo-elements: `.card::before` → `.card[data-s-abcdef01]::before`
-/// - Comma-separated: `.a, .b` → `.a[data-s-abcdef01], .b[data-s-abcdef01]`
-/// - At-rules: `@media (…) { .a { … } }` — prelude passed through,
-///   selectors inside the block are scoped recursively.
-/// - `@keyframes` / `@font-face` — passed through without scoping.
+/// Parses the CSS with lightningcss, visits every selector, appends
+/// `[data-SCOPE_ID]` to each compound selector, and serialises back.
+/// At-rules like `@keyframes` and `@font-face` are automatically left
+/// untouched because lightningcss's visitor only visits actual selectors.
 fn rewrite_scoped_css(css: &str, scope_id: &str) -> String {
+  use cssparser::ToCss as CssToCss;
+  use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
+  use lightningcss::traits::IntoOwned;
+  use lightningcss::visitor::{Visit, VisitTypes, Visitor};
+
   let attr = format!("[data-{scope_id}]");
-  let mut result = String::with_capacity(css.len() * 2);
-  let mut pos = 0;
-  let bytes = css.as_bytes();
 
-  while pos < bytes.len() {
-    // Skip whitespace, preserving it.
-    if bytes[pos].is_ascii_whitespace() {
-      result.push(bytes[pos] as char);
-      pos += 1;
-      continue;
+  let mut stylesheet = match StyleSheet::parse(css, ParserOptions::default()) {
+    Ok(ss) => ss,
+    Err(_) => return css.to_string(),
+  };
+
+  struct ScopeVisitor {
+    attr: String,
+  }
+
+  impl<'i> Visitor<'i> for ScopeVisitor {
+    type Error = std::convert::Infallible;
+
+    fn visit_types(&self) -> VisitTypes {
+      VisitTypes::SELECTORS
     }
 
-    // Skip comments.
-    if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
-      let start = pos;
-      pos += 2;
-      while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
-        pos += 1;
+    fn visit_selector(
+      &mut self,
+      selector: &mut lightningcss::selector::Selector<'i>,
+    ) -> Result<(), Self::Error> {
+      // 1. Serialize the selector to a CSS string.
+      let sel_css = selector.to_css_string();
+
+      // 2. Scope it using our text-based scoping.
+      //    Handles comma-separated selectors (lightningcss already
+      //    splits them, so we get one at a time here).
+      let scoped = scope_selector(&sel_css, &self.attr);
+
+      // 3. Parse the scoped selector back into AST.
+      let mut input = cssparser::ParserInput::new(&scoped);
+      let mut parser = cssparser::Parser::new(&mut input);
+      if let Ok(new_sel) =
+        <lightningcss::selector::Selector as lightningcss::traits::ParseWithOptions>::parse_with_options(
+          &mut parser,
+          &lightningcss::stylesheet::ParserOptions::default(),
+        )
+      {
+        // 4. Convert to owned data so the lifetime is decoupled from
+        //    the local `scoped` string, then assign.
+        let owned: lightningcss::selector::Selector<'i> = new_sel.into_owned();
+        *selector = owned;
       }
-      if pos + 1 < bytes.len() {
-        pos += 2; // skip */
-      }
-      result.push_str(&css[start..pos]);
-      continue;
-    }
-
-    // At-rule: starts with `@`.
-    if bytes[pos] == b'@' {
-      pos = handle_at_rule(css, pos, &attr, &mut result);
-      continue;
-    }
-
-    // Regular rule: collect selector up to `{`, scope it, then pass
-    // through the declaration block.
-    let sel_start = pos;
-    while pos < bytes.len() && bytes[pos] != b'{' {
-      pos += 1;
-    }
-    let selector_text = &css[sel_start..pos];
-
-    if !selector_text.trim().is_empty() {
-      let selectors: Vec<&str> = selector_text.split(',').collect();
-      for (i, sel) in selectors.iter().enumerate() {
-        if i > 0 {
-          result.push_str(", ");
-        }
-        let rewritten = scope_selector(sel.trim(), &attr);
-        result.push_str(&rewritten);
-      }
-    }
-
-    // Copy the declaration block `{ … }` verbatim.
-    if pos < bytes.len() && bytes[pos] == b'{' {
-      let block_end = find_matching_brace(css, pos);
-      result.push_str(&css[pos..block_end]);
-      pos = block_end;
+      Ok(())
     }
   }
 
-  result
-}
+  let mut visitor = ScopeVisitor { attr };
+  let _ = stylesheet.visit(&mut visitor);
 
-/// Handle a CSS at-rule starting at `pos` (which points to `@`).
-///
-/// - **Conditional at-rules** (`@media`, `@supports`, `@layer`, `@container`,
-///   `@scope`, `@document`): the prelude is passed through verbatim; the
-///   nested block's selectors are scoped recursively.
-/// - **Non-selector at-rules** (`@keyframes`, `@font-face`, `@import`,
-///   `@charset`, `@namespace`, `@property`, `@counter-style`): passed
-///   through entirely without scoping.
-///
-/// Returns the new position after the at-rule.
-fn handle_at_rule(css: &str, start: usize, attr: &str, out: &mut String) -> usize {
-  let bytes = css.as_bytes();
-
-  // Extract the at-keyword (e.g. "media", "keyframes").
-  let keyword_start = start + 1; // skip '@'
-  let mut keyword_end = keyword_start;
-  while keyword_end < bytes.len() && bytes[keyword_end].is_ascii_alphanumeric()
-    || (keyword_end < bytes.len() && bytes[keyword_end] == b'-')
-  {
-    keyword_end += 1;
-  }
-  let keyword = &css[keyword_start..keyword_end];
-
-  // Find the opening `{` or `;` (for statement at-rules like @import).
-  let mut pos = keyword_end;
-  while pos < bytes.len() && bytes[pos] != b'{' && bytes[pos] != b';' {
-    pos += 1;
-  }
-
-  // Statement at-rule (e.g. `@import url(…);`) — no block, pass through.
-  if pos >= bytes.len() || bytes[pos] == b';' {
-    let end = if pos < bytes.len() { pos + 1 } else { pos };
-    out.push_str(&css[start..end]);
-    return end;
-  }
-
-  // Block at-rule — decide whether to scope its contents.
-  let prelude = &css[start..pos]; // "@media (max-width: 768px)"
-  let block_end = find_matching_brace(css, pos);
-  let block_inner = &css[pos + 1..block_end - 1]; // contents between { and }
-
-  // At-rules whose blocks contain selectors that should be scoped.
-  let scope_inner = matches!(
-    keyword.to_ascii_lowercase().as_str(),
-    "media" | "supports" | "layer" | "container" | "scope" | "document"
-  );
-
-  if scope_inner {
-    out.push_str(prelude);
-    out.push_str(" {");
-    // Recursively scope selectors inside the block.
-    let rewritten_inner = rewrite_scoped_inner(block_inner, attr);
-    out.push_str(&rewritten_inner);
-    out.push('}');
-  } else {
-    // @keyframes, @font-face, etc. — pass through as-is.
-    out.push_str(&css[start..block_end]);
-  }
-
-  block_end
-}
-
-/// Rewrite selectors inside an at-rule block (recursive inner pass).
-///
-/// This handles the same logic as the top level of `rewrite_scoped_css`
-/// but operates on the content between `{` and `}` of an at-rule block.
-fn rewrite_scoped_inner(css: &str, attr: &str) -> String {
-  let mut result = String::with_capacity(css.len() * 2);
-  let mut pos = 0;
-  let bytes = css.as_bytes();
-
-  while pos < bytes.len() {
-    if bytes[pos].is_ascii_whitespace() {
-      result.push(bytes[pos] as char);
-      pos += 1;
-      continue;
-    }
-
-    // Skip comments.
-    if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
-      let start = pos;
-      pos += 2;
-      while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
-        pos += 1;
-      }
-      if pos + 1 < bytes.len() {
-        pos += 2;
-      }
-      result.push_str(&css[start..pos]);
-      continue;
-    }
-
-    // Nested at-rule.
-    if bytes[pos] == b'@' {
-      pos = handle_at_rule(css, pos, attr, &mut result);
-      continue;
-    }
-
-    // Selector up to `{`.
-    let sel_start = pos;
-    while pos < bytes.len() && bytes[pos] != b'{' {
-      pos += 1;
-    }
-    let selector_text = &css[sel_start..pos];
-
-    if !selector_text.trim().is_empty() {
-      let selectors: Vec<&str> = selector_text.split(',').collect();
-      for (i, sel) in selectors.iter().enumerate() {
-        if i > 0 {
-          result.push_str(", ");
-        }
-        let rewritten = scope_selector(sel.trim(), attr);
-        result.push_str(&rewritten);
-      }
-    }
-
-    // Copy the declaration block.
-    if pos < bytes.len() && bytes[pos] == b'{' {
-      let block_end = find_matching_brace(css, pos);
-      result.push_str(&css[pos..block_end]);
-      pos = block_end;
-    }
-  }
-
-  result
-}
-
-/// Find the position just past the matching `}` for a `{` at `open_pos`.
-fn find_matching_brace(css: &str, open_pos: usize) -> usize {
-  let bytes = css.as_bytes();
-  debug_assert_eq!(bytes[open_pos], b'{');
-  let mut depth: usize = 0;
-  let mut pos = open_pos;
-
-  while pos < bytes.len() {
-    match bytes[pos] {
-      b'{' => depth += 1,
-      b'}' => {
-        depth -= 1;
-        if depth == 0 {
-          return pos + 1;
-        }
-      }
-      _ => {}
-    }
-    pos += 1;
-  }
-
-  // Unterminated block — return end of input.
-  bytes.len()
+  stylesheet
+    .to_css(PrinterOptions::default())
+    .map(|r| r.code)
+    .unwrap_or_else(|_| css.to_string())
 }
 
 /// Scope a single CSS selector by appending the scope attribute selector
