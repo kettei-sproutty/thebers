@@ -7,6 +7,7 @@ Thebe is a (WIP) Rust framework for building component-based applications using 
 | Crate | Description |
 |-------|-------------|
 | [thebe-ast](./crates/thebe-ast) | Parser and AST for `.trs` single-file components |
+| [thebe-compiler](./crates/thebe-compiler) | Compiler IR and lowering pass (AST → IR) |
 
 ## `.trs` File Format
 

@@ -1,0 +1,13 @@
+[package]
+name = "thebe-compiler"
+description = "Compiler IR and lowering pass for .trs single-file components"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thebe-ast = { path = "../thebe-ast" }
+thiserror = "2.0.18"
+ariadne = "0.6.0"

@@ -1,0 +1,11 @@
+<script setup>
+let title = "Welcome to Thebe!";
+</script>
+
+<header>
+  <h1>{{ title }}</h1>
+</header>
+
+<main>
+  <p>This is the home page.</p>
+</main>

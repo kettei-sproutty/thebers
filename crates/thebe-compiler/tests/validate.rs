@@ -1,0 +1,202 @@
+use thebe_compiler::ValidationWarning;
+
+/// Helper: parse → lower → validate.
+fn warnings(source: &str) -> Vec<ValidationWarning> {
+  let ast = thebe_ast::parse(source).unwrap();
+  let ir = thebe_compiler::lower(source, &ast).unwrap();
+  thebe_compiler::validate(&ir)
+}
+
+// ── No warnings on clean input ──────────────────────────────────────────
+
+#[test]
+fn clean_component_no_warnings() {
+  let w = warnings(r#"<div class="a" on:click="go">{{ x }}</div>"#);
+  assert!(w.is_empty(), "expected no warnings, got: {w:?}");
+}
+
+// ── Duplicate attributes ────────────────────────────────────────────────
+
+#[test]
+fn duplicate_attribute_warns() {
+  let w = warnings(r#"<div class="a" class="b">x</div>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateAttribute { name, tag, .. } if name == "class" && tag == "div"));
+}
+
+#[test]
+fn different_attributes_no_warning() {
+  let w = warnings(r#"<div class="a" id="b">x</div>"#);
+  assert!(w.is_empty());
+}
+
+// ── Duplicate event handlers ────────────────────────────────────────────
+
+#[test]
+fn duplicate_event_handler_warns() {
+  let w = warnings(r#"<button on:click="a" on:click="b">x</button>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateEventHandler { event, .. } if event == "click"));
+}
+
+#[test]
+fn different_events_no_warning() {
+  let w = warnings(r#"<button on:click="a" on:submit="b">x</button>"#);
+  assert!(w.is_empty());
+}
+
+// ── Duplicate bindings ──────────────────────────────────────────────────
+
+#[test]
+fn duplicate_binding_warns() {
+  let w = warnings(r#"<input bind:value="a" bind:value="b" />"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateBinding { property, .. } if property == "value"));
+}
+
+// ── Duplicate class toggles ─────────────────────────────────────────────
+
+#[test]
+fn duplicate_class_toggle_warns() {
+  let w = warnings(r#"<div class:active="a" class:active="b">x</div>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateClassToggle { class, .. } if class == "active"));
+}
+
+// ── Duplicate style props ───────────────────────────────────────────────
+
+#[test]
+fn duplicate_style_prop_warns() {
+  let w = warnings(r#"<div style:color="red" style:color="blue">x</div>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateStyleProp { property, .. } if property == "color"));
+}
+
+// ── Conflicting modifiers ───────────────────────────────────────────────
+
+#[test]
+fn passive_and_prevent_default_warns() {
+  let w = warnings(r#"<button on:click|passive|preventDefault="go">x</button>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::ConflictingPassivePreventDefault { event, .. } if event == "click"));
+}
+
+#[test]
+fn passive_and_nonpassive_warns() {
+  let w = warnings(r#"<button on:click|passive|nonpassive="go">x</button>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::ConflictingPassiveNonPassive { event, .. } if event == "click"));
+}
+
+#[test]
+fn prevent_default_alone_is_fine() {
+  let w = warnings(r#"<button on:click|preventDefault="go">x</button>"#);
+  assert!(w.is_empty());
+}
+
+// ── Empty expressions ───────────────────────────────────────────────────
+
+#[test]
+fn empty_expression_warns() {
+  let w = warnings("<p>{{  }}</p>");
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::EmptyExpression { .. }));
+}
+
+#[test]
+fn non_empty_expression_no_warning() {
+  let w = warnings("<p>{{ x }}</p>");
+  assert!(w.is_empty());
+}
+
+// ── Empty event handlers ────────────────────────────────────────────────
+
+#[test]
+fn empty_event_handler_warns() {
+  let w = warnings(r#"<button on:click="">x</button>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::EmptyEventHandler { event, .. } if event == "click"));
+}
+
+// ── Multiple default slots ──────────────────────────────────────────────
+
+#[test]
+fn multiple_default_slots_warns() {
+  let w = warnings("<div><slot /><slot /></div>");
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::MultipleDefaultSlots { .. }));
+}
+
+#[test]
+fn single_default_slot_no_warning() {
+  let w = warnings("<div><slot /></div>");
+  assert!(w.is_empty());
+}
+
+// ── Duplicate named slots ───────────────────────────────────────────────
+
+#[test]
+fn duplicate_named_slot_warns() {
+  let w = warnings(r#"<div><slot name="header" /><slot name="header" /></div>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateNamedSlot { name, .. } if name == "header"));
+}
+
+#[test]
+fn different_named_slots_no_warning() {
+  let w = warnings(r#"<div><slot name="header" /><slot name="footer" /></div>"#);
+  assert!(w.is_empty());
+}
+
+// ── Nested validation ───────────────────────────────────────────────────
+
+#[test]
+fn validation_recurses_into_children() {
+  // Duplicate attr is inside a nested div.
+  let w = warnings(r#"<div><p class="a" class="b">x</p></div>"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateAttribute { tag, .. } if tag == "p"));
+}
+
+#[test]
+fn validation_recurses_into_if_branches() {
+  let w = warnings(r#"{#if show}<div class="a" class="b">x</div>{/if}"#);
+  assert_eq!(w.len(), 1);
+}
+
+#[test]
+fn validation_recurses_into_each_body() {
+  let w = warnings(r#"{#each items as item}<div class="a" class="b">x</div>{/each}"#);
+  assert_eq!(w.len(), 1);
+}
+
+#[test]
+fn validation_checks_components() {
+  let w = warnings(r#"<Button on:click="a" on:click="b" />"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::DuplicateEventHandler { .. }));
+}
+
+// ── Multiple warnings ───────────────────────────────────────────────────
+
+#[test]
+fn multiple_issues_produce_multiple_warnings() {
+  let w = warnings(r#"<div class="a" class="b" on:click="x" on:click="y">{{  }}</div>"#);
+  assert_eq!(w.len(), 3);
+}
+
+// ── Slot duplicates across tree ─────────────────────────────────────────
+
+#[test]
+fn default_slots_in_different_branches_warn() {
+  // Both branches have a default slot — still a duplicate at component level.
+  let w = warnings("{#if show}<slot />{:else}<slot />{/if}");
+  assert_eq!(w.len(), 1);
+  assert!(matches!(&w[0], ValidationWarning::MultipleDefaultSlots { .. }));
+}
+
+#[test]
+fn named_slot_plus_default_slot_no_warning() {
+  let w = warnings(r#"<div><slot /><slot name="footer" /></div>"#);
+  assert!(w.is_empty());
+}

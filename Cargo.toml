@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/thebe-ast"]
+members = ["crates/thebe-ast", "crates/thebe-compiler", "crates/thebe-cli", "www"]
 
 [workspace.package]
 edition = "2024"
