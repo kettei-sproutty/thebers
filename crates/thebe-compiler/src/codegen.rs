@@ -811,7 +811,7 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
   }
 
   impl<'i> Visitor<'i> for ScopeVisitor {
-    type Error = std::convert::Infallible;
+    type Error = String;
 
     fn visit_types(&self) -> VisitTypes {
       VisitTypes::SELECTORS
@@ -832,23 +832,27 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
       // 3. Parse the scoped selector back into AST.
       let mut input = cssparser::ParserInput::new(&scoped);
       let mut parser = cssparser::Parser::new(&mut input);
-      if let Ok(new_sel) =
+      let new_sel =
         <lightningcss::selector::Selector as lightningcss::traits::ParseWithOptions>::parse_with_options(
           &mut parser,
           &lightningcss::stylesheet::ParserOptions::default(),
         )
-      {
-        // 4. Convert to owned data so the lifetime is decoupled from
-        //    the local `scoped` string, then assign.
-        let owned: lightningcss::selector::Selector<'i> = new_sel.into_owned();
-        *selector = owned;
-      }
+        .map_err(|e| {
+          format!(
+            "failed to re-parse scoped selector '{scoped}' (original: '{sel_css}'): {e:?}"
+          )
+        })?;
+
+      // 4. Convert to owned data so the lifetime is decoupled from
+      //    the local `scoped` string, then assign.
+      let owned: lightningcss::selector::Selector<'i> = new_sel.into_owned();
+      *selector = owned;
       Ok(())
     }
   }
 
   let mut visitor = ScopeVisitor { attr };
-  let _ = stylesheet.visit(&mut visitor);
+  stylesheet.visit(&mut visitor).map_err(|e| format!("CSS scope rewrite error: {e}"))?;
 
   stylesheet
     .to_css(PrinterOptions::default())
