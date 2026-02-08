@@ -483,7 +483,15 @@ impl<'a> HtmlParser<'a> {
     } else {
       // Parse the value for interpolations.
       let val_base_offset = self.base_offset + val_start;
-      let value = parse_template(val_str, val_base_offset)?;
+      let mut value = parse_template(val_str, val_base_offset)?;
+
+      // Distinguish `attr=""` (explicit empty) from `attr` (boolean).
+      // parse_template("") returns an empty vec, but we want at least one
+      // Text("") node so downstream code can tell them apart.
+      if value.is_empty() && val_str.is_empty() {
+        value.push(TemplateNode::Text(String::new()));
+      }
+
       attributes.push(Attribute {
         name: full_name.to_string(),
         value,

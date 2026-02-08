@@ -238,3 +238,71 @@ fn nonempty_style_prop_no_warning() {
   let w = warnings(r#"<div style:color="theme_color">text</div>"#);
   assert!(w.is_empty(), "expected no warnings, got: {w:?}");
 }
+
+// ── Component prop validation ───────────────────────────────────────────
+
+#[test]
+fn empty_component_prop_warns() {
+  let w = warnings(r#"<Button label="">x</Button>"#);
+  assert_eq!(w.len(), 1, "expected 1 warning, got: {w:?}");
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::EmptyComponentProp { name, component, .. }
+    if name == "label" && component == "Button"
+  ));
+}
+
+#[test]
+fn non_empty_component_prop_no_warning() {
+  let w = warnings(r#"<Button label="Click me" />"#);
+  assert!(w.is_empty(), "expected no warnings, got: {w:?}");
+}
+
+#[test]
+fn boolean_component_prop_no_warning() {
+  let w = warnings(r#"<Button disabled />"#);
+  assert!(w.is_empty(), "expected no warnings, got: {w:?}");
+}
+
+#[test]
+fn slot_attribute_on_component_child_not_warned() {
+  // slot="name" is intentional, not an empty prop.
+  let w = warnings(r#"<Card><div slot="header">title</div></Card>"#);
+  assert!(w.is_empty(), "expected no warnings, got: {w:?}");
+}
+
+#[test]
+fn class_directive_on_component_warns() {
+  let w = warnings(r#"<Button class:active="is_active" />"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::DirectiveOnComponent { directive, component, .. }
+    if directive == "class:active" && component == "Button"
+  ));
+}
+
+#[test]
+fn style_directive_on_component_warns() {
+  let w = warnings(r#"<Card style:color="red" />"#);
+  assert_eq!(w.len(), 1);
+  assert!(matches!(
+    &w[0],
+    ValidationWarning::DirectiveOnComponent { directive, component, .. }
+    if directive == "style:color" && component == "Card"
+  ));
+}
+
+#[test]
+fn event_on_component_no_warning() {
+  // Events on components are valid for bubbling.
+  let w = warnings(r#"<Button on:click="handleClick" />"#);
+  assert!(w.is_empty(), "expected no warnings, got: {w:?}");
+}
+
+#[test]
+fn multiple_component_prop_issues() {
+  let w = warnings(r#"<Widget label="" class:active="true" style:color="c" />"#);
+  // 1 empty prop + 1 class directive + 1 style directive = 3 warnings
+  assert_eq!(w.len(), 3, "expected 3 warnings, got: {w:?}");
+}

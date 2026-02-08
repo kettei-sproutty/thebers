@@ -219,7 +219,7 @@ fn lower_element(el: &Element) -> Result<IrElement, CompileError> {
 }
 
 fn lower_component(el: &Element) -> Result<IrComponentRef, CompileError> {
-  let (events, bindings, _class_toggles, _style_props, actions) = decompose_directives(el)?;
+  let (events, bindings, class_toggles, style_props, actions) = decompose_directives(el)?;
 
   let props = el.attributes.iter().map(lower_attribute).collect();
   let children = el
@@ -233,6 +233,8 @@ fn lower_component(el: &Element) -> Result<IrComponentRef, CompileError> {
     props,
     events,
     bindings,
+    class_toggles,
+    style_props,
     actions,
     children,
     self_closing: el.self_closing,

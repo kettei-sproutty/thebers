@@ -53,8 +53,7 @@ impl ValidationCtx {
     match node {
       IrNode::Element(el) => self.validate_element(el),
       IrNode::Component(comp) => self.validate_component(comp),
-      IrNode::Expr(e) => self.check_empty_expr(&e.expr, e.span),
-      IrNode::RawHtml(e) => self.check_empty_expr(&e.expr, e.span),
+      IrNode::Expr(e) | IrNode::RawHtml(e) => self.check_empty_expr(&e.expr, e.span),
       IrNode::If(ib) => {
         for branch in &ib.branches {
           self.validate_nodes(&branch.children);
@@ -92,6 +91,8 @@ impl ValidationCtx {
     self.check_event_modifiers(&comp.events);
     self.check_empty_handlers(&comp.events);
     self.check_empty_binding_expressions(&comp.bindings);
+    self.check_empty_component_props(comp);
+    self.check_directives_on_component(comp);
     self.validate_nodes(&comp.children);
   }
 
@@ -285,6 +286,65 @@ impl ValidationCtx {
             span: b.span,
           });
       }
+    }
+  }
+
+  // ── Component prop checks ──────────────────────────────────────────
+
+  /// Warn when a component prop has an empty value (e.g. `<Button label="">`).
+  ///
+  /// Boolean props (no `=` at all) are fine; this targets explicitly
+  /// empty quoted values which are almost always a mistake.
+  fn check_empty_component_props(&mut self, comp: &IrComponentRef) {
+    for prop in &comp.props {
+      // Skip the reserved `slot` attribute.
+      if prop.name == "slot" {
+        continue;
+      }
+      // An empty `value` vec means a boolean attribute — that's intentional.
+      if prop.value.is_empty() {
+        continue;
+      }
+      // Check whether all value segments are empty text.
+      let all_empty = prop.value.iter().all(|v| match v {
+        thebe_ast::TemplateNode::Text(t) => t.is_empty(),
+        thebe_ast::TemplateNode::Expr { expr, .. } => expr.trim().is_empty(),
+      });
+      if all_empty {
+        self
+          .warnings
+          .push(ValidationWarning::EmptyComponentProp {
+            name: prop.name.clone(),
+            component: comp.name.clone(),
+            span: prop.span,
+          });
+      }
+    }
+  }
+
+  /// Warn when `class:` or `style:` directives are used on a component.
+  ///
+  /// These element-level directives are silently ignored during codegen
+  /// because components are rendered via their own `render()` function
+  /// and control their own root elements.
+  fn check_directives_on_component(&mut self, comp: &IrComponentRef) {
+    for toggle in &comp.class_toggles {
+      self
+        .warnings
+        .push(ValidationWarning::DirectiveOnComponent {
+          directive: format!("class:{}", toggle.class),
+          component: comp.name.clone(),
+          span: toggle.span,
+        });
+    }
+    for prop in &comp.style_props {
+      self
+        .warnings
+        .push(ValidationWarning::DirectiveOnComponent {
+          directive: format!("style:{}", prop.property),
+          component: comp.name.clone(),
+          span: prop.span,
+        });
     }
   }
 

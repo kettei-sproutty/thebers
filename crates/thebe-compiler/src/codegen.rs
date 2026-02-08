@@ -48,7 +48,9 @@ use thebe_ast::TemplateNode;
 ///   __html
 /// }
 /// ```
-#[must_use]
+/// # Errors
+///
+/// Returns a [`CompileError`] if CSS scoping or code generation fails.
 pub fn generate(component: &CompiledComponent, route_params: &[String]) -> Result<String, CompileError> {
   let scope_attrs = build_scope_attrs(component);
   let mut e = Emitter::new(scope_attrs);
@@ -756,7 +758,7 @@ fn collect_named_slots(nodes: &[IrNode]) -> Vec<String> {
 /// attribute itself is stripped). Everything else goes to the default
 /// slot.
 ///
-/// Returns `(default_children, named_groups)` where named_groups is a
+/// Returns `(default_children, named_groups)` where `named_groups` is a
 /// sorted list of `(slot_name, children)` pairs.
 fn partition_slot_children(children: &[IrNode]) -> (Vec<&IrNode>, Vec<(String, Vec<&IrNode>)>) {
   let mut default_children: Vec<&IrNode> = Vec::new();
@@ -884,18 +886,12 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
   use lightningcss::traits::IntoOwned;
   use lightningcss::visitor::{Visit, VisitTypes, Visitor};
 
-  let attr = format!("[data-{scope_id}]");
-
-  let mut stylesheet = match StyleSheet::parse(css, ParserOptions::default()) {
-    Ok(ss) => ss,
-    Err(e) => return Err(format!("CSS parse error: {e}")),
-  };
-
   struct ScopeVisitor {
     attr: String,
   }
 
   impl<'i> Visitor<'i> for ScopeVisitor {
+
     type Error = String;
 
     fn visit_types(&self) -> VisitTypes {
@@ -936,7 +932,13 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
     }
   }
 
-  let mut visitor = ScopeVisitor { attr };
+  let mut visitor = ScopeVisitor { attr: format!("[data-{scope_id}]") };
+
+  let mut stylesheet = match StyleSheet::parse(css, ParserOptions::default()) {
+    Ok(ss) => ss,
+    Err(e) => return Err(format!("CSS parse error: {e}")),
+  };
+
   stylesheet.visit(&mut visitor).map_err(|e| format!("CSS scope rewrite error: {e}"))?;
 
   stylesheet

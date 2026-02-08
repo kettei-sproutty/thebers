@@ -310,6 +310,24 @@ fn warn_diag_info(warning: &ValidationWarning) -> WarnDiagInfo {
       first_range: Some(first_span.start..first_span.end),
       help: Some("each named slot should appear only once"),
     },
+    ValidationWarning::EmptyComponentProp {
+      name, component, span,
+    } => WarnDiagInfo {
+      range: span.start..span.end,
+      message: "empty component prop",
+      label: format!("prop '{name}' on <{component}> has an empty value"),
+      first_range: None,
+      help: Some("provide a value or remove the attribute; use a boolean attribute (no =) for flags"),
+    },
+    ValidationWarning::DirectiveOnComponent {
+      directive, component, span,
+    } => WarnDiagInfo {
+      range: span.start..span.end,
+      message: "directive on component",
+      label: format!("'{directive}' on <{component}> has no effect"),
+      first_range: None,
+      help: Some("class: and style: directives only work on HTML elements, not components"),
+    },
   }
 }
 
