@@ -611,7 +611,7 @@ fn emit_root_mod(
       let layout_path = layout_segs.join("::");
       writeln!(
         code,
-        "  let body = routes::{layout_path}::render_with_slot(&body);"
+        "  let body = routes::{layout_path}::render_with_slot(&body, &[]);"
       )
       .expect("write to String");
     }

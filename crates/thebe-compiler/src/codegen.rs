@@ -154,10 +154,13 @@ impl Emitter {
     // Also emit render_with_slot for layout support.
     self.line("");
     self.line("/// Render this component, injecting `__slot` content in place of `<slot />`.");
+    self.line("///");
+    self.line("/// Named slot content is passed via `__named_slots` — a slice of");
+    self.line("/// `(name, html)` pairs looked up by `<slot name=\"X\">` tags.");
     self.line("#[allow(clippy::all, unused)]");
 
     if route_params.is_empty() {
-      self.line("pub fn render_with_slot(__slot: &str) -> String {");
+      self.line("pub fn render_with_slot(__slot: &str, __named_slots: &[(&str, &str)]) -> String {");
     } else {
       let params: String = route_params
         .iter()
@@ -165,7 +168,7 @@ impl Emitter {
         .collect::<Vec<_>>()
         .join(", ");
       self.line(&format!(
-        "pub fn render_with_slot(__slot: &str, {params}) -> String {{"
+        "pub fn render_with_slot(__slot: &str, __named_slots: &[(&str, &str)], {params}) -> String {{"
       ));
     }
     self.indent();
@@ -184,14 +187,19 @@ impl Emitter {
 
     self.line("let mut __html = String::new();");
 
-    // Declare named slot variables so that `<slot name="X">` fallback
-    // logic compiles. These are initialised to `None` here; once full
-    // named-slot passing is wired up the caller will supply real values.
+    // Declare named slot variables. In standalone mode these are `None`;
+    // in slotted mode they are looked up from the `__named_slots` parameter.
     let named_slots = collect_named_slots(&c.template);
     for name in &named_slots {
-      self.line(&format!(
-        "let __slot_{name}: Option<&str> = None;"
-      ));
+      if slotted {
+        self.line(&format!(
+          "let __slot_{name}: Option<&str> = __named_slots.iter().find(|(n, _)| *n == \"{name}\").map(|(_, v)| *v);"
+        ));
+      } else {
+        self.line(&format!(
+          "let __slot_{name}: Option<&str> = None;"
+        ));
+      }
     }
 
     self.slotted = slotted;
@@ -512,26 +520,52 @@ impl Emitter {
         comp.name
       ));
     } else {
-      // Component with children (default slot content).
-      // Render children into __comp_slot by temporarily redirecting __html.
+      // Component with children — partition into default and named slots.
+      let (default_children, named_groups) = partition_slot_children(&comp.children);
+
       self.line("{");
       self.indent();
+
+      // Render default slot content.
       self.line("let mut __comp_slot = String::new();");
-      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
-      for child in &comp.children {
-        self.emit_node(child);
+      if !default_children.is_empty() {
+        self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+        for child in &default_children {
+          self.emit_node(child);
+        }
+        self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
       }
-      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+
+      // Render named slot content into separate strings.
+      for (slot_name, children) in &named_groups {
+        self.line(&format!("let mut __comp_slot_{slot_name} = String::new();"));
+        self.line(&format!("std::mem::swap(&mut __html, &mut __comp_slot_{slot_name});"));
+        for child in children {
+          self.emit_node(child);
+        }
+        self.line(&format!("std::mem::swap(&mut __html, &mut __comp_slot_{slot_name});"));
+      }
+
+      // Build named slots slice.
+      let named_slots_arg = if named_groups.is_empty() {
+        "&[]".to_string()
+      } else {
+        let entries: Vec<String> = named_groups
+          .iter()
+          .map(|(name, _)| format!("(\"{name}\", __comp_slot_{name}.as_str())"))
+          .collect();
+        format!("&[{}]", entries.join(", "))
+      };
 
       if comp.props.is_empty() {
         self.line(&format!(
-          "__html.push_str(&{}::render_with_slot(&__comp_slot));",
+          "__html.push_str(&{}::render_with_slot(&__comp_slot, {named_slots_arg}));",
           comp.name
         ));
       } else {
         let args = Self::build_prop_args(&comp.props);
         self.line(&format!(
-          "__html.push_str(&{}::render_with_slot(&__comp_slot, {args}));",
+          "__html.push_str(&{}::render_with_slot(&__comp_slot, {named_slots_arg}, {args}));",
           comp.name
         ));
       }
@@ -705,13 +739,57 @@ impl Emitter {
 /// Recursively collect all distinct named-slot names from a template tree.
 ///
 /// Returns a sorted, deduplicated list of slot names so that the codegen
-/// can emit `let __slot_NAME: Option<&str> = None;` declarations.
+/// can emit `let __slot_NAME: Option<&str> = ...;` declarations.
 fn collect_named_slots(nodes: &[IrNode]) -> Vec<String> {
   let mut names = Vec::new();
   collect_named_slots_inner(nodes, &mut names);
   names.sort();
   names.dedup();
   names
+}
+
+/// Partition a component's children into default-slot children and
+/// named-slot groups.
+///
+/// An `IrNode::Element` or `IrNode::Component` whose attributes contain
+/// `slot="name"` is routed to the named group for `name` (the `slot`
+/// attribute itself is stripped). Everything else goes to the default
+/// slot.
+///
+/// Returns `(default_children, named_groups)` where named_groups is a
+/// sorted list of `(slot_name, children)` pairs.
+fn partition_slot_children(children: &[IrNode]) -> (Vec<&IrNode>, Vec<(String, Vec<&IrNode>)>) {
+  let mut default_children: Vec<&IrNode> = Vec::new();
+  let mut named_map: std::collections::BTreeMap<String, Vec<&IrNode>> =
+    std::collections::BTreeMap::new();
+
+  for child in children {
+    if let Some(slot_name) = get_slot_attr(child) {
+      named_map.entry(slot_name).or_default().push(child);
+    } else {
+      default_children.push(child);
+    }
+  }
+
+  let named_groups: Vec<(String, Vec<&IrNode>)> = named_map.into_iter().collect();
+  (default_children, named_groups)
+}
+
+/// If `node` is an element or component with a `slot="name"` attribute,
+/// return the slot name.
+fn get_slot_attr(node: &IrNode) -> Option<String> {
+  let attrs = match node {
+    IrNode::Element(el) => &el.attributes,
+    IrNode::Component(comp) => &comp.props,
+    _ => return None,
+  };
+
+  attrs.iter().find(|a| a.name == "slot").and_then(|a| {
+    a.value.first().and_then(|v| match v {
+      TemplateNode::Text(t) => Some(t.clone()),
+      TemplateNode::Expr { .. } => None,
+    })
+  })
 }
 
 fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {
