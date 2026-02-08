@@ -543,3 +543,66 @@ fn unscoped_css_not_rewritten() {
   // No scope attribute in the CSS.
   assert!(!code.contains("[data-s-"));
 }
+
+// ── At-rules in scoped CSS ──────────────────────────────────────────────
+
+#[test]
+fn scoped_css_media_query_prelude_untouched() {
+  let code = codegen(
+    "<style scoped>@media (max-width: 768px) { .card { color: red; } }</style>\n<div>x</div>",
+  );
+  // The @media prelude must not be mangled.
+  assert!(code.contains("@media (max-width: 768px)"));
+  // The selector inside the media block must be scoped.
+  assert!(code.contains(".card[data-s-"));
+}
+
+#[test]
+fn scoped_css_supports_rule() {
+  let code = codegen(
+    "<style scoped>@supports (display: grid) { .grid { display: grid; } }</style>\n<div>x</div>",
+  );
+  assert!(code.contains("@supports (display: grid)"));
+  assert!(code.contains(".grid[data-s-"));
+}
+
+#[test]
+fn scoped_css_keyframes_not_scoped() {
+  let code = codegen(
+    "<style scoped>@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>\n<div>x</div>",
+  );
+  // @keyframes content must pass through as-is — no scope attributes.
+  assert!(code.contains("@keyframes spin"));
+  // "from" and "to" must NOT get [data-s-…] appended.
+  assert!(!code.contains("from[data-s-"));
+  assert!(!code.contains("to[data-s-"));
+}
+
+#[test]
+fn scoped_css_import_passthrough() {
+  let code = codegen(
+    "<style scoped>@import url('other.css'); .card { color: red; }</style>\n<div>x</div>",
+  );
+  assert!(code.contains("@import url('other.css');"));
+  assert!(code.contains(".card[data-s-"));
+}
+
+#[test]
+fn scoped_css_font_face_passthrough() {
+  let code = codegen(
+    "<style scoped>@font-face { font-family: 'Custom'; src: url('f.woff2'); }</style>\n<div>x</div>",
+  );
+  assert!(code.contains("@font-face"));
+  assert!(!code.contains("font-family[data-s-"));
+}
+
+#[test]
+fn scoped_css_mixed_rules_and_at_rules() {
+  let code = codegen(
+    "<style scoped>.a { color: red; } @media print { .b { display: none; } } .c { margin: 0; }</style>\n<div>x</div>",
+  );
+  assert!(code.contains(".a[data-s-"));
+  assert!(code.contains(".b[data-s-"));
+  assert!(code.contains(".c[data-s-"));
+  assert!(code.contains("@media print"));
+}

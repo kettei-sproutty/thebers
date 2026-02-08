@@ -763,76 +763,51 @@ fn esc_fmt(s: &str) -> String {
 /// - Combinators: `.card > p` → `.card[data-s-abcdef01] > p[data-s-abcdef01]`
 /// - Pseudo-elements: `.card::before` → `.card[data-s-abcdef01]::before`
 /// - Comma-separated: `.a, .b` → `.a[data-s-abcdef01], .b[data-s-abcdef01]`
+/// - At-rules: `@media (…) { .a { … } }` — prelude passed through,
+///   selectors inside the block are scoped recursively.
+/// - `@keyframes` / `@font-face` — passed through without scoping.
 fn rewrite_scoped_css(css: &str, scope_id: &str) -> String {
   let attr = format!("[data-{scope_id}]");
   let mut result = String::with_capacity(css.len() * 2);
-  let mut chars = css.chars().peekable();
+  let mut pos = 0;
+  let bytes = css.as_bytes();
 
-  // Track whether we're inside a rule body `{ ... }`.
-  let mut brace_depth: usize = 0;
-  // Track whether we're inside a string/comment.
-  let mut in_comment = false;
+  while pos < bytes.len() {
+    // Skip whitespace, preserving it.
+    if bytes[pos].is_ascii_whitespace() {
+      result.push(bytes[pos] as char);
+      pos += 1;
+      continue;
+    }
 
-  while let Some(&c) = chars.peek() {
-    if in_comment {
-      result.push(c);
-      chars.next();
-      if c == '*' && chars.peek() == Some(&'/') {
-        result.push('/');
-        chars.next();
-        in_comment = false;
+    // Skip comments.
+    if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
+      let start = pos;
+      pos += 2;
+      while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
+        pos += 1;
       }
-      continue;
-    }
-
-    // Check for comment start.
-    if c == '/' && {
-      let mut peek = chars.clone();
-      peek.next();
-      peek.peek() == Some(&'*')
-    } {
-      result.push(c);
-      chars.next();
-      if let Some(&c2) = chars.peek() {
-        result.push(c2);
-        chars.next();
+      if pos + 1 < bytes.len() {
+        pos += 2; // skip */
       }
-      in_comment = true;
+      result.push_str(&css[start..pos]);
       continue;
     }
 
-    if c == '{' {
-      brace_depth += 1;
-      result.push(c);
-      chars.next();
+    // At-rule: starts with `@`.
+    if bytes[pos] == b'@' {
+      pos = handle_at_rule(css, pos, &attr, &mut result);
       continue;
     }
 
-    if c == '}' {
-      brace_depth = brace_depth.saturating_sub(1);
-      result.push(c);
-      chars.next();
-      continue;
+    // Regular rule: collect selector up to `{`, scope it, then pass
+    // through the declaration block.
+    let sel_start = pos;
+    while pos < bytes.len() && bytes[pos] != b'{' {
+      pos += 1;
     }
+    let selector_text = &css[sel_start..pos];
 
-    // Inside a rule body — pass through as-is.
-    if brace_depth > 0 {
-      result.push(c);
-      chars.next();
-      continue;
-    }
-
-    // We're in a selector context. Collect the full selector list up to `{`.
-    let mut selector_text = String::new();
-    while let Some(&sc) = chars.peek() {
-      if sc == '{' {
-        break;
-      }
-      selector_text.push(sc);
-      chars.next();
-    }
-
-    // Rewrite each comma-separated selector.
     if !selector_text.trim().is_empty() {
       let selectors: Vec<&str> = selector_text.split(',').collect();
       for (i, sel) in selectors.iter().enumerate() {
@@ -843,9 +818,168 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> String {
         result.push_str(&rewritten);
       }
     }
+
+    // Copy the declaration block `{ … }` verbatim.
+    if pos < bytes.len() && bytes[pos] == b'{' {
+      let block_end = find_matching_brace(css, pos);
+      result.push_str(&css[pos..block_end]);
+      pos = block_end;
+    }
   }
 
   result
+}
+
+/// Handle a CSS at-rule starting at `pos` (which points to `@`).
+///
+/// - **Conditional at-rules** (`@media`, `@supports`, `@layer`, `@container`,
+///   `@scope`, `@document`): the prelude is passed through verbatim; the
+///   nested block's selectors are scoped recursively.
+/// - **Non-selector at-rules** (`@keyframes`, `@font-face`, `@import`,
+///   `@charset`, `@namespace`, `@property`, `@counter-style`): passed
+///   through entirely without scoping.
+///
+/// Returns the new position after the at-rule.
+fn handle_at_rule(css: &str, start: usize, attr: &str, out: &mut String) -> usize {
+  let bytes = css.as_bytes();
+
+  // Extract the at-keyword (e.g. "media", "keyframes").
+  let keyword_start = start + 1; // skip '@'
+  let mut keyword_end = keyword_start;
+  while keyword_end < bytes.len() && bytes[keyword_end].is_ascii_alphanumeric()
+    || (keyword_end < bytes.len() && bytes[keyword_end] == b'-')
+  {
+    keyword_end += 1;
+  }
+  let keyword = &css[keyword_start..keyword_end];
+
+  // Find the opening `{` or `;` (for statement at-rules like @import).
+  let mut pos = keyword_end;
+  while pos < bytes.len() && bytes[pos] != b'{' && bytes[pos] != b';' {
+    pos += 1;
+  }
+
+  // Statement at-rule (e.g. `@import url(…);`) — no block, pass through.
+  if pos >= bytes.len() || bytes[pos] == b';' {
+    let end = if pos < bytes.len() { pos + 1 } else { pos };
+    out.push_str(&css[start..end]);
+    return end;
+  }
+
+  // Block at-rule — decide whether to scope its contents.
+  let prelude = &css[start..pos]; // "@media (max-width: 768px)"
+  let block_end = find_matching_brace(css, pos);
+  let block_inner = &css[pos + 1..block_end - 1]; // contents between { and }
+
+  // At-rules whose blocks contain selectors that should be scoped.
+  let scope_inner = matches!(
+    keyword.to_ascii_lowercase().as_str(),
+    "media" | "supports" | "layer" | "container" | "scope" | "document"
+  );
+
+  if scope_inner {
+    out.push_str(prelude);
+    out.push_str(" {");
+    // Recursively scope selectors inside the block.
+    let rewritten_inner = rewrite_scoped_inner(block_inner, attr);
+    out.push_str(&rewritten_inner);
+    out.push('}');
+  } else {
+    // @keyframes, @font-face, etc. — pass through as-is.
+    out.push_str(&css[start..block_end]);
+  }
+
+  block_end
+}
+
+/// Rewrite selectors inside an at-rule block (recursive inner pass).
+///
+/// This handles the same logic as the top level of `rewrite_scoped_css`
+/// but operates on the content between `{` and `}` of an at-rule block.
+fn rewrite_scoped_inner(css: &str, attr: &str) -> String {
+  let mut result = String::with_capacity(css.len() * 2);
+  let mut pos = 0;
+  let bytes = css.as_bytes();
+
+  while pos < bytes.len() {
+    if bytes[pos].is_ascii_whitespace() {
+      result.push(bytes[pos] as char);
+      pos += 1;
+      continue;
+    }
+
+    // Skip comments.
+    if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
+      let start = pos;
+      pos += 2;
+      while pos + 1 < bytes.len() && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
+        pos += 1;
+      }
+      if pos + 1 < bytes.len() {
+        pos += 2;
+      }
+      result.push_str(&css[start..pos]);
+      continue;
+    }
+
+    // Nested at-rule.
+    if bytes[pos] == b'@' {
+      pos = handle_at_rule(css, pos, attr, &mut result);
+      continue;
+    }
+
+    // Selector up to `{`.
+    let sel_start = pos;
+    while pos < bytes.len() && bytes[pos] != b'{' {
+      pos += 1;
+    }
+    let selector_text = &css[sel_start..pos];
+
+    if !selector_text.trim().is_empty() {
+      let selectors: Vec<&str> = selector_text.split(',').collect();
+      for (i, sel) in selectors.iter().enumerate() {
+        if i > 0 {
+          result.push_str(", ");
+        }
+        let rewritten = scope_selector(sel.trim(), attr);
+        result.push_str(&rewritten);
+      }
+    }
+
+    // Copy the declaration block.
+    if pos < bytes.len() && bytes[pos] == b'{' {
+      let block_end = find_matching_brace(css, pos);
+      result.push_str(&css[pos..block_end]);
+      pos = block_end;
+    }
+  }
+
+  result
+}
+
+/// Find the position just past the matching `}` for a `{` at `open_pos`.
+fn find_matching_brace(css: &str, open_pos: usize) -> usize {
+  let bytes = css.as_bytes();
+  debug_assert_eq!(bytes[open_pos], b'{');
+  let mut depth: usize = 0;
+  let mut pos = open_pos;
+
+  while pos < bytes.len() {
+    match bytes[pos] {
+      b'{' => depth += 1,
+      b'}' => {
+        depth -= 1;
+        if depth == 0 {
+          return pos + 1;
+        }
+      }
+      _ => {}
+    }
+    pos += 1;
+  }
+
+  // Unterminated block — return end of input.
+  bytes.len()
 }
 
 /// Scope a single CSS selector by appending the scope attribute selector
