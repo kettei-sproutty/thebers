@@ -546,7 +546,7 @@ fn scoped_css_pseudo_element() {
 <div>x</div>"#);
   assert!(code.contains(".btn[data-s-"));
   // lightningcss may normalise ::before → :before
-  assert!(code.contains("before"));
+  assert!(code.contains("::before") || code.contains(":before"));
 }
 
 #[test]
