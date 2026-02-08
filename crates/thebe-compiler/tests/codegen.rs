@@ -648,3 +648,48 @@ fn mixed_empty_and_valid_style_props() {
   assert!(code.contains("background"));
   assert!(!code.contains("color"));
 }
+
+// ── :global() in scoped CSS ─────────────────────────────────────────────
+
+#[test]
+fn scoped_css_global_selector_not_scoped() {
+  let code = codegen(
+    "<style scoped>:global(.reset) { margin: 0; }</style>\n<div>x</div>",
+  );
+  // The inner selector should appear without scope attribute.
+  assert!(code.contains(".reset"));
+  assert!(!code.contains(".reset[data-s-"));
+  assert!(code.contains("margin: 0"));
+}
+
+#[test]
+fn scoped_css_global_mixed_with_scoped() {
+  let code = codegen(
+    "<style scoped>.card { color: red; } :global(.reset) { margin: 0; }</style>\n<div>x</div>",
+  );
+  // .card should be scoped, .reset should not.
+  assert!(code.contains(".card[data-s-"));
+  assert!(code.contains(".reset"));
+  assert!(!code.contains(".reset[data-s-"));
+}
+
+#[test]
+fn scoped_css_global_in_descendant() {
+  let code = codegen(
+    "<style scoped>.card :global(.inner) { color: blue; }</style>\n<div>x</div>",
+  );
+  // .card should be scoped, .inner should not.
+  assert!(code.contains(".card[data-s-"));
+  assert!(code.contains(".inner"));
+  assert!(!code.contains(".inner[data-s-"));
+}
+
+#[test]
+fn scoped_css_global_with_child_combinator() {
+  let code = codegen(
+    "<style scoped>.parent > :global(.child) { color: red; }</style>\n<div>x</div>",
+  );
+  assert!(code.contains(".parent[data-s-"));
+  assert!(code.contains("> .child"));
+  assert!(!code.contains(".child[data-s-"));
+}

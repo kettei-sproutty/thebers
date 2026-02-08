@@ -867,6 +867,8 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
 /// - Pseudo-elements: `.btn::before` → `.btn[data-s-X]::before`
 /// - Pseudo-classes: `.btn:hover` → `.btn[data-s-X]:hover`
 /// - Combinators: `.a > .b` → `.a[data-s-X] > .b[data-s-X]`
+/// - `:global(.class)` — strips the wrapper and emits the inner
+///   selector **without** the scope attribute.
 fn scope_selector(selector: &str, attr: &str) -> String {
   if selector.is_empty() {
     return String::new();
@@ -893,6 +895,12 @@ fn scope_selector(selector: &str, attr: &str) -> String {
     // Descendant combinator (space between parts) — add space if needed.
     if !result.is_empty() && !result.ends_with(' ') {
       result.push(' ');
+    }
+
+    // :global(...) — emit inner selector without scoping.
+    if let Some(inner) = strip_global(trimmed) {
+      result.push_str(inner);
+      continue;
     }
 
     // Find where to insert the scope attribute: before pseudo-elements
@@ -970,7 +978,8 @@ fn split_on_combinators(selector: &str) -> Vec<String> {
 }
 
 /// Find the byte position where pseudo-elements (`::`) or pseudo-classes
-/// (`:`) begin in a simple selector, ignoring attribute selectors.
+/// (`:`) begin in a simple selector, ignoring attribute selectors and
+/// `:global(...)` wrappers.
 fn find_pseudo_boundary(selector: &str) -> Option<usize> {
   let mut i = 0;
   let bytes = selector.as_bytes();
@@ -985,9 +994,44 @@ fn find_pseudo_boundary(selector: &str) -> Option<usize> {
           i += 1; // skip ']'
         }
       }
-      b':' => return Some(i),
+      b':' => {
+        // Skip `:global(...)` — it is not a pseudo boundary.
+        if selector[i..].starts_with(":global(") {
+          // Jump past the closing ')'.
+          let mut depth = 0;
+          let mut j = i;
+          while j < bytes.len() {
+            match bytes[j] {
+              b'(' => depth += 1,
+              b')' => {
+                depth -= 1;
+                if depth == 0 {
+                  j += 1;
+                  break;
+                }
+              }
+              _ => {}
+            }
+            j += 1;
+          }
+          i = j;
+        } else {
+          return Some(i);
+        }
+      }
       _ => i += 1,
     }
   }
   None
+}
+
+/// If `selector` is wrapped in `:global(...)`, return the inner selector.
+/// Otherwise return `None`.
+fn strip_global(selector: &str) -> Option<&str> {
+  let s = selector.trim();
+  if s.starts_with(":global(") && s.ends_with(')') {
+    Some(&s[":global(".len()..s.len() - 1])
+  } else {
+    None
+  }
 }
