@@ -557,7 +557,7 @@ impl Emitter {
             let mut fmt_args = Vec::new();
             for part in &p.value {
               match part {
-                TemplateNode::Text(t) => fmt_str.push_str(&esc_rs(t)),
+                TemplateNode::Text(t) => fmt_str.push_str(&esc_fmt(&esc_rs(t))),
                 TemplateNode::Expr { expr, .. } => {
                   fmt_str.push_str("{}");
                   fmt_args.push(expr.clone());
@@ -741,6 +741,14 @@ fn esc_rs(s: &str) -> String {
     .replace('\n', "\\n")
     .replace('\r', "\\r")
     .replace('\t', "\\t")
+}
+
+/// Escape literal `{` and `}` for use inside a `format!` string.
+///
+/// `{` → `{{`, `}` → `}}` so that they pass through `format!` as-is
+/// instead of being interpreted as format placeholders.
+fn esc_fmt(s: &str) -> String {
+  s.replace('{', "{{").replace('}', "}}")
 }
 
 /// Rewrite CSS selectors to include a scoped attribute selector.

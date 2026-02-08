@@ -427,6 +427,16 @@ fn component_with_dynamic_prop() {
 }
 
 #[test]
+fn component_prop_literal_braces_escaped() {
+  // Literal braces in a mixed prop value must be escaped so format! doesn't choke.
+  let code = codegen(r#"<Card title="Hello {world} {{ name }}" />"#);
+  // The format string should have {{ and }} for the literal braces.
+  assert!(code.contains("Hello {{world}}"));
+  // And a real placeholder for the expression.
+  assert!(code.contains("format!"));
+}
+
+#[test]
 fn component_with_children() {
   let code = codegen(r#"<Modal><p>content</p></Modal>"#);
   assert!(code.contains("Modal::render_with_slot(&__comp_slot)"));
