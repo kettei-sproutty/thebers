@@ -151,6 +151,42 @@ pub enum ValidationWarning {
     /// Span of the duplicate occurrence.
     dup_span: Span,
   },
+
+  /// A component prop has an empty value (e.g. `<Button label="">`).
+  #[error("empty prop value for '{name}' on <{component}> at byte {}", span.start)]
+  EmptyComponentProp {
+    /// The prop name.
+    name: String,
+    /// The component name.
+    component: String,
+    /// Span of the attribute.
+    span: Span,
+  },
+
+  /// A `class:toggle` or `style:prop` directive is used on a component,
+  /// where it has no effect (components don't forward element directives).
+  #[error("{directive} directive on component <{component}> has no effect at byte {}", span.start)]
+  DirectiveOnComponent {
+    /// The directive string, e.g. `"class:active"` or `"style:color"`.
+    directive: String,
+    /// The component name.
+    component: String,
+    /// Span of the directive.
+    span: Span,
+  },
+
+  /// A `slot` attribute has an invalid value — it must be a single, static,
+  /// non-empty text value (e.g. `slot="header"`). Dynamic expressions,
+  /// empty strings, and multi-segment values are not allowed.
+  #[error("invalid slot attribute on <{tag}> at byte {}", span.start)]
+  InvalidSlotAttribute {
+    /// The tag or component name.
+    tag: String,
+    /// Human-readable reason.
+    reason: String,
+    /// Span of the `slot` attribute.
+    span: Span,
+  },
 }
 
 impl ValidationWarning {
@@ -171,7 +207,10 @@ impl ValidationWarning {
       | Self::EmptyEventHandler { span, .. }
       | Self::EmptyStylePropValue { span, .. }
       | Self::EmptyClassToggleCondition { span, .. }
-      | Self::EmptyBindingExpression { span, .. } => *span,
+      | Self::EmptyBindingExpression { span, .. }
+      | Self::EmptyComponentProp { span, .. }
+      | Self::DirectiveOnComponent { span, .. }
+      | Self::InvalidSlotAttribute { span, .. } => *span,
     }
   }
 }

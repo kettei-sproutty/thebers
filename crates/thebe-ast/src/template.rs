@@ -159,6 +159,13 @@ impl<'a> HtmlParser<'a> {
         continue;
       }
 
+      // Raw HTML injection: {@html expr}.
+      if remaining.starts_with("{@html ") {
+        let node = self.parse_raw_html()?;
+        nodes.push(node);
+        continue;
+      }
+
       // Check for opening tag.
       if remaining.starts_with('<') && !remaining.starts_with("</") {
         let element = self.parse_element()?;
@@ -211,6 +218,26 @@ impl<'a> HtmlParser<'a> {
     Ok(HtmlNode::Expr { expr, span })
   }
 
+  /// Parse a `{@html expr}` raw HTML injection node.
+  fn parse_raw_html(&mut self) -> Result<HtmlNode, ParseError> {
+    let start = self.abs_pos();
+    // Skip `{@html `
+    let prefix_len = "{@html ".len();
+    self.pos += prefix_len;
+
+    let rest = self.remaining();
+    let close = rest.find('}').ok_or_else(|| ParseError::UnclosedRawHtml {
+      span: Span::new(start, start + prefix_len),
+    })?;
+
+    let expr = rest[..close].trim().to_string();
+    let end = self.pos + close + 1; // include `}`
+    let span = Span::new(start, self.base_offset + end);
+
+    self.pos = end;
+    Ok(HtmlNode::RawHtml { expr, span })
+  }
+
   /// Parse plain text until the next special sequence.
   fn parse_text(&mut self) -> String {
     let start = self.pos;
@@ -221,6 +248,7 @@ impl<'a> HtmlParser<'a> {
         || remaining.starts_with("{#")
         || remaining.starts_with("{:")
         || remaining.starts_with("{/")
+        || remaining.starts_with("{@")
       {
         break;
       }
@@ -455,7 +483,15 @@ impl<'a> HtmlParser<'a> {
     } else {
       // Parse the value for interpolations.
       let val_base_offset = self.base_offset + val_start;
-      let value = parse_template(val_str, val_base_offset)?;
+      let mut value = parse_template(val_str, val_base_offset)?;
+
+      // Distinguish `attr=""` (explicit empty) from `attr` (boolean).
+      // parse_template("") returns an empty vec, but we want at least one
+      // Text("") node so downstream code can tell them apart.
+      if value.is_empty() && val_str.is_empty() {
+        value.push(TemplateNode::Text(String::new()));
+      }
+
       attributes.push(Attribute {
         name: full_name.to_string(),
         value,

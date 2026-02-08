@@ -33,8 +33,8 @@ impl CompileError {
   pub fn span(&self) -> Option<Span> {
     match self {
       CompileError::Parse(e) => e.span(),
-      CompileError::UnknownEventModifier { span, .. } => Some(*span),
-      CompileError::CssScopeError { span, .. } => Some(*span),
+      CompileError::UnknownEventModifier { span, .. }
+      | CompileError::CssScopeError { span, .. } => Some(*span),
     }
   }
 }

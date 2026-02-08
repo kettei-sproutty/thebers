@@ -282,14 +282,14 @@ h1 { color: blue; }
 fn render_with_no_params() {
   let code = codegen("<div>x</div>");
   assert!(code.contains("pub fn render() -> String {"));
-  assert!(code.contains("pub fn render_with_slot(__slot: &str) -> String {"));
+  assert!(code.contains("pub fn render_with_slot(__slot: &str, __named_slots: &[(&str, &str)]) -> String {"));
 }
 
 #[test]
 fn render_with_single_param() {
   let code = codegen_with_params("<p>{{ slug }}</p>", &["slug"]);
   assert!(code.contains("pub fn render(slug: &str) -> String {"));
-  assert!(code.contains("pub fn render_with_slot(__slot: &str, slug: &str) -> String {"));
+  assert!(code.contains("pub fn render_with_slot(__slot: &str, __named_slots: &[(&str, &str)], slug: &str) -> String {"));
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn render_with_multiple_params() {
   let code = codegen_with_params("<p>{{ org }}/{{ repo }}</p>", &["org", "repo"]);
   assert!(code.contains("pub fn render(org: &str, repo: &str) -> String {"));
   assert!(code.contains(
-    "pub fn render_with_slot(__slot: &str, org: &str, repo: &str) -> String {"
+    "pub fn render_with_slot(__slot: &str, __named_slots: &[(&str, &str)], org: &str, repo: &str) -> String {"
   ));
 }
 
@@ -450,7 +450,7 @@ fn component_prop_literal_braces_escaped() {
 #[test]
 fn component_with_children() {
   let code = codegen(r#"<Modal><p>content</p></Modal>"#);
-  assert!(code.contains("Modal::render_with_slot(&__comp_slot)"));
+  assert!(code.contains("Modal::render_with_slot(&__comp_slot, &[])"));
   assert!(code.contains(r#"__html.push_str("<p");"#));
 }
 
@@ -473,6 +473,57 @@ fn named_slot_without_fallback() {
   assert!(code.contains("__slot_footer.as_ref()"));
 }
 
+// ── Named slot content passing (parent → child) ────────────────────────
+
+#[test]
+fn component_with_named_slot_content() {
+  let code = codegen(r#"<Card><div slot="header">Title</div><p>body</p></Card>"#);
+  // Default slot content should be the <p>.
+  assert!(code.contains(r#"__html.push_str("<p");"#));
+  // Named slot "header" should be rendered separately.
+  assert!(code.contains("__comp_slot_header"));
+  // The render call should pass named slots.
+  assert!(code.contains(r#"("header", __comp_slot_header.as_str())"#));
+}
+
+#[test]
+fn component_with_only_named_slot() {
+  let code = codegen(r#"<Layout><nav slot="sidebar">menu</nav></Layout>"#);
+  // No default slot content — __comp_slot should be declared but empty.
+  assert!(code.contains("let mut __comp_slot = String::new();"));
+  // Named slot should be present.
+  assert!(code.contains("__comp_slot_sidebar"));
+  assert!(code.contains(r#"("sidebar", __comp_slot_sidebar.as_str())"#));
+}
+
+#[test]
+fn component_with_no_named_slots() {
+  let code = codegen(r#"<Modal><p>just default</p></Modal>"#);
+  // Should pass &[] for named slots.
+  assert!(code.contains("render_with_slot(&__comp_slot, &[])"));
+}
+
+#[test]
+fn dynamic_slot_attribute_treated_as_default() {
+  // A dynamic slot attribute like slot="{{ name }}" is not valid for
+  // named slot routing — the child should fall into the default slot.
+  let code = codegen(r#"<Card><div slot="{{ name }}">dynamic</div><p>body</p></Card>"#);
+  // Both <div> and <p> should end up in the default slot content (no named slot render var).
+  assert!(
+    !code.contains("__comp_slot_"),
+    "dynamic slot attribute should not create a named slot variable"
+  );
+}
+
+#[test]
+fn empty_slot_attribute_treated_as_default() {
+  let code = codegen(r#"<Card><div slot="">content</div></Card>"#);
+  assert!(
+    !code.contains("__comp_slot_"),
+    "empty slot attribute should not create a named slot variable"
+  );
+}
+
 #[test]
 fn named_slot_declaration_deduplicated() {
   // Two slots with the same name should produce only one `let` declaration
@@ -480,10 +531,18 @@ fn named_slot_declaration_deduplicated() {
   let code = codegen(
     r#"{#if show}<slot name="x">a</slot>{:else}<slot name="x">b</slot>{/if}"#,
   );
+  // In standalone render: `let __slot_x: Option<&str> = None;`
+  // In slotted render:    `let __slot_x: Option<&str> = __named_slots...`
+  // Both appear exactly once each.
+  let none_count = code.matches("let __slot_x: Option<&str> = None;").count();
+  let lookup_count = code.matches("let __slot_x: Option<&str> = __named_slots").count();
   assert_eq!(
-    code.matches("let __slot_x: Option<&str> = None;").count(),
-    2,
-    "expected exactly one declaration of __slot_x per render function"
+    none_count, 1,
+    "expected exactly one None declaration of __slot_x in standalone render"
+  );
+  assert_eq!(
+    lookup_count, 1,
+    "expected exactly one lookup declaration of __slot_x in slotted render"
   );
 }
 
@@ -647,4 +706,83 @@ fn mixed_empty_and_valid_style_props() {
   assert!(code.contains("style="));
   assert!(code.contains("background"));
   assert!(!code.contains("color"));
+}
+
+// ── :global() in scoped CSS ─────────────────────────────────────────────
+
+#[test]
+fn scoped_css_global_selector_not_scoped() {
+  let code = codegen(
+    "<style scoped>:global(.reset) { margin: 0; }</style>\n<div>x</div>",
+  );
+  // The inner selector should appear without scope attribute.
+  assert!(code.contains(".reset"));
+  assert!(!code.contains(".reset[data-s-"));
+  assert!(code.contains("margin: 0"));
+}
+
+#[test]
+fn scoped_css_global_mixed_with_scoped() {
+  let code = codegen(
+    "<style scoped>.card { color: red; } :global(.reset) { margin: 0; }</style>\n<div>x</div>",
+  );
+  // .card should be scoped, .reset should not.
+  assert!(code.contains(".card[data-s-"));
+  assert!(code.contains(".reset"));
+  assert!(!code.contains(".reset[data-s-"));
+}
+
+#[test]
+fn scoped_css_global_in_descendant() {
+  let code = codegen(
+    "<style scoped>.card :global(.inner) { color: blue; }</style>\n<div>x</div>",
+  );
+  // .card should be scoped, .inner should not.
+  assert!(code.contains(".card[data-s-"));
+  assert!(code.contains(".inner"));
+  assert!(!code.contains(".inner[data-s-"));
+}
+
+#[test]
+fn scoped_css_global_with_child_combinator() {
+  let code = codegen(
+    "<style scoped>.parent > :global(.child) { color: red; }</style>\n<div>x</div>",
+  );
+  assert!(code.contains(".parent[data-s-"));
+  assert!(code.contains("> .child"));
+  assert!(!code.contains(".child[data-s-"));
+}
+
+// ── Raw HTML injection ({@html}) ────────────────────────────────────────
+
+#[test]
+fn raw_html_injection() {
+  let code = codegen("<div>{@html content}</div>");
+  // Raw HTML should NOT use __esc — content is injected directly.
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { content }));"));
+  // The push_str for the raw html should not use __esc.
+  // (The __esc function definition is still present for other uses.)
+  assert!(!code.contains("__esc(&format!(\"{}\", { content }))"));
+}
+
+#[test]
+fn raw_html_with_complex_expr() {
+  let code = codegen("<div>{@html markdown_to_html(&body)}</div>");
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { markdown_to_html(&body) }));"));
+}
+
+#[test]
+fn raw_html_alongside_escaped_expr() {
+  let code = codegen("<div>{{ safe }} {@html raw}</div>");
+  // The {{ safe }} should use __esc.
+  assert!(code.contains("__esc(&format!(\"{}\", { safe }))"));
+  // The {@html raw} should not.
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { raw }));"));
+}
+
+#[test]
+fn raw_html_in_if_block() {
+  let code = codegen("{#if show}{@html content}{/if}");
+  assert!(code.contains("if show {"));
+  assert!(code.contains("__html.push_str(&format!(\"{}\", { content }));"));
 }

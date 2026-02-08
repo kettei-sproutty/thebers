@@ -48,7 +48,9 @@ use thebe_ast::TemplateNode;
 ///   __html
 /// }
 /// ```
-#[must_use]
+/// # Errors
+///
+/// Returns a [`CompileError`] if CSS scoping or code generation fails.
 pub fn generate(component: &CompiledComponent, route_params: &[String]) -> Result<String, CompileError> {
   let scope_attrs = build_scope_attrs(component);
   let mut e = Emitter::new(scope_attrs);
@@ -154,10 +156,13 @@ impl Emitter {
     // Also emit render_with_slot for layout support.
     self.line("");
     self.line("/// Render this component, injecting `__slot` content in place of `<slot />`.");
+    self.line("///");
+    self.line("/// Named slot content is passed via `__named_slots` — a slice of");
+    self.line("/// `(name, html)` pairs looked up by `<slot name=\"X\">` tags.");
     self.line("#[allow(clippy::all, unused)]");
 
     if route_params.is_empty() {
-      self.line("pub fn render_with_slot(__slot: &str) -> String {");
+      self.line("pub fn render_with_slot(__slot: &str, __named_slots: &[(&str, &str)]) -> String {");
     } else {
       let params: String = route_params
         .iter()
@@ -165,7 +170,7 @@ impl Emitter {
         .collect::<Vec<_>>()
         .join(", ");
       self.line(&format!(
-        "pub fn render_with_slot(__slot: &str, {params}) -> String {{"
+        "pub fn render_with_slot(__slot: &str, __named_slots: &[(&str, &str)], {params}) -> String {{"
       ));
     }
     self.indent();
@@ -184,14 +189,19 @@ impl Emitter {
 
     self.line("let mut __html = String::new();");
 
-    // Declare named slot variables so that `<slot name="X">` fallback
-    // logic compiles. These are initialised to `None` here; once full
-    // named-slot passing is wired up the caller will supply real values.
+    // Declare named slot variables. In standalone mode these are `None`;
+    // in slotted mode they are looked up from the `__named_slots` parameter.
     let named_slots = collect_named_slots(&c.template);
     for name in &named_slots {
-      self.line(&format!(
-        "let __slot_{name}: Option<&str> = None;"
-      ));
+      if slotted {
+        self.line(&format!(
+          "let __slot_{name}: Option<&str> = __named_slots.iter().find(|(n, _)| *n == \"{name}\").map(|(_, v)| *v);"
+        ));
+      } else {
+        self.line(&format!(
+          "let __slot_{name}: Option<&str> = None;"
+        ));
+      }
     }
 
     self.slotted = slotted;
@@ -223,6 +233,13 @@ impl Emitter {
       IrNode::Each(each) => self.emit_each(each),
       IrNode::Component(comp) => self.emit_component(comp),
       IrNode::Slot(slot) => self.emit_slot(slot),
+      IrNode::RawHtml(e) => {
+        // Inject the expression result without HTML-escaping.
+        self.line(&format!(
+          "__html.push_str(&format!(\"{{}}\", {{ {} }}));",
+          e.expr
+        ));
+      }
     }
   }
 
@@ -505,26 +522,52 @@ impl Emitter {
         comp.name
       ));
     } else {
-      // Component with children (default slot content).
-      // Render children into __comp_slot by temporarily redirecting __html.
+      // Component with children — partition into default and named slots.
+      let (default_children, named_groups) = partition_slot_children(&comp.children);
+
       self.line("{");
       self.indent();
+
+      // Render default slot content.
       self.line("let mut __comp_slot = String::new();");
-      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
-      for child in &comp.children {
-        self.emit_node(child);
+      if !default_children.is_empty() {
+        self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+        for child in &default_children {
+          self.emit_node(child);
+        }
+        self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
       }
-      self.line("std::mem::swap(&mut __html, &mut __comp_slot);");
+
+      // Render named slot content into separate strings.
+      for (slot_name, children) in &named_groups {
+        self.line(&format!("let mut __comp_slot_{slot_name} = String::new();"));
+        self.line(&format!("std::mem::swap(&mut __html, &mut __comp_slot_{slot_name});"));
+        for child in children {
+          self.emit_node(child);
+        }
+        self.line(&format!("std::mem::swap(&mut __html, &mut __comp_slot_{slot_name});"));
+      }
+
+      // Build named slots slice.
+      let named_slots_arg = if named_groups.is_empty() {
+        "&[]".to_string()
+      } else {
+        let entries: Vec<String> = named_groups
+          .iter()
+          .map(|(name, _)| format!("(\"{name}\", __comp_slot_{name}.as_str())"))
+          .collect();
+        format!("&[{}]", entries.join(", "))
+      };
 
       if comp.props.is_empty() {
         self.line(&format!(
-          "__html.push_str(&{}::render_with_slot(&__comp_slot));",
+          "__html.push_str(&{}::render_with_slot(&__comp_slot, {named_slots_arg}));",
           comp.name
         ));
       } else {
         let args = Self::build_prop_args(&comp.props);
         self.line(&format!(
-          "__html.push_str(&{}::render_with_slot(&__comp_slot, {args}));",
+          "__html.push_str(&{}::render_with_slot(&__comp_slot, {named_slots_arg}, {args}));",
           comp.name
         ));
       }
@@ -698,13 +741,73 @@ impl Emitter {
 /// Recursively collect all distinct named-slot names from a template tree.
 ///
 /// Returns a sorted, deduplicated list of slot names so that the codegen
-/// can emit `let __slot_NAME: Option<&str> = None;` declarations.
+/// can emit `let __slot_NAME: Option<&str> = ...;` declarations.
 fn collect_named_slots(nodes: &[IrNode]) -> Vec<String> {
   let mut names = Vec::new();
   collect_named_slots_inner(nodes, &mut names);
   names.sort();
   names.dedup();
   names
+}
+
+/// Partition a component's children into default-slot children and
+/// named-slot groups.
+///
+/// An `IrNode::Element` or `IrNode::Component` whose attributes contain
+/// `slot="name"` is routed to the named group for `name` (the `slot`
+/// attribute itself is stripped). Everything else goes to the default
+/// slot.
+///
+/// Returns `(default_children, named_groups)` where `named_groups` is a
+/// sorted list of `(slot_name, children)` pairs.
+fn partition_slot_children(children: &[IrNode]) -> (Vec<&IrNode>, Vec<(String, Vec<&IrNode>)>) {
+  let mut default_children: Vec<&IrNode> = Vec::new();
+  let mut named_map: std::collections::BTreeMap<String, Vec<&IrNode>> =
+    std::collections::BTreeMap::new();
+
+  for child in children {
+    if let Some(slot_name) = get_slot_attr(child) {
+      named_map.entry(slot_name).or_default().push(child);
+    } else {
+      default_children.push(child);
+    }
+  }
+
+  let named_groups: Vec<(String, Vec<&IrNode>)> = named_map.into_iter().collect();
+  (default_children, named_groups)
+}
+
+/// If `node` is an element or component with a valid `slot="name"` attribute,
+/// return the slot name.
+///
+/// A valid slot attribute must be exactly one `TemplateNode::Text` segment
+/// whose trimmed value is non-empty. Dynamic values (expressions), empty
+/// strings, and multi-segment values are not valid slot targets and return
+/// `None` (the validation pass emits a warning for these cases).
+fn get_slot_attr(node: &IrNode) -> Option<String> {
+  let attrs = match node {
+    IrNode::Element(el) => &el.attributes,
+    IrNode::Component(comp) => &comp.props,
+    _ => return None,
+  };
+
+  let slot_attr = attrs.iter().find(|a| a.name == "slot")?;
+
+  // Must be exactly one segment and that segment must be static text.
+  if slot_attr.value.len() != 1 {
+    return None;
+  }
+  match &slot_attr.value[0] {
+    TemplateNode::Text(t) => {
+      let trimmed = t.trim();
+      if trimmed.is_empty() {
+        None
+      } else {
+        Some(trimmed.to_string())
+      }
+    }
+    TemplateNode::Expr { .. } => None,
+  }
 }
 
 fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {
@@ -730,7 +833,7 @@ fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {
       IrNode::Each(each) => {
         collect_named_slots_inner(&each.children, out);
       }
-      IrNode::Text(_) | IrNode::Expr(_) => {}
+      IrNode::Text(_) | IrNode::Expr(_) | IrNode::RawHtml(_) => {}
     }
   }
 }
@@ -799,18 +902,12 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
   use lightningcss::traits::IntoOwned;
   use lightningcss::visitor::{Visit, VisitTypes, Visitor};
 
-  let attr = format!("[data-{scope_id}]");
-
-  let mut stylesheet = match StyleSheet::parse(css, ParserOptions::default()) {
-    Ok(ss) => ss,
-    Err(e) => return Err(format!("CSS parse error: {e}")),
-  };
-
   struct ScopeVisitor {
     attr: String,
   }
 
   impl<'i> Visitor<'i> for ScopeVisitor {
+
     type Error = String;
 
     fn visit_types(&self) -> VisitTypes {
@@ -851,7 +948,13 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
     }
   }
 
-  let mut visitor = ScopeVisitor { attr };
+  let mut visitor = ScopeVisitor { attr: format!("[data-{scope_id}]") };
+
+  let mut stylesheet = match StyleSheet::parse(css, ParserOptions::default()) {
+    Ok(ss) => ss,
+    Err(e) => return Err(format!("CSS parse error: {e}")),
+  };
+
   stylesheet.visit(&mut visitor).map_err(|e| format!("CSS scope rewrite error: {e}"))?;
 
   stylesheet
@@ -867,6 +970,8 @@ fn rewrite_scoped_css(css: &str, scope_id: &str) -> Result<String, String> {
 /// - Pseudo-elements: `.btn::before` → `.btn[data-s-X]::before`
 /// - Pseudo-classes: `.btn:hover` → `.btn[data-s-X]:hover`
 /// - Combinators: `.a > .b` → `.a[data-s-X] > .b[data-s-X]`
+/// - `:global(.class)` — strips the wrapper and emits the inner
+///   selector **without** the scope attribute.
 fn scope_selector(selector: &str, attr: &str) -> String {
   if selector.is_empty() {
     return String::new();
@@ -893,6 +998,12 @@ fn scope_selector(selector: &str, attr: &str) -> String {
     // Descendant combinator (space between parts) — add space if needed.
     if !result.is_empty() && !result.ends_with(' ') {
       result.push(' ');
+    }
+
+    // :global(...) — emit inner selector without scoping.
+    if let Some(inner) = strip_global(trimmed) {
+      result.push_str(inner);
+      continue;
     }
 
     // Find where to insert the scope attribute: before pseudo-elements
@@ -970,7 +1081,8 @@ fn split_on_combinators(selector: &str) -> Vec<String> {
 }
 
 /// Find the byte position where pseudo-elements (`::`) or pseudo-classes
-/// (`:`) begin in a simple selector, ignoring attribute selectors.
+/// (`:`) begin in a simple selector, ignoring attribute selectors and
+/// `:global(...)` wrappers.
 fn find_pseudo_boundary(selector: &str) -> Option<usize> {
   let mut i = 0;
   let bytes = selector.as_bytes();
@@ -985,9 +1097,44 @@ fn find_pseudo_boundary(selector: &str) -> Option<usize> {
           i += 1; // skip ']'
         }
       }
-      b':' => return Some(i),
+      b':' => {
+        // Skip `:global(...)` — it is not a pseudo boundary.
+        if selector[i..].starts_with(":global(") {
+          // Jump past the closing ')'.
+          let mut depth = 0;
+          let mut j = i;
+          while j < bytes.len() {
+            match bytes[j] {
+              b'(' => depth += 1,
+              b')' => {
+                depth -= 1;
+                if depth == 0 {
+                  j += 1;
+                  break;
+                }
+              }
+              _ => {}
+            }
+            j += 1;
+          }
+          i = j;
+        } else {
+          return Some(i);
+        }
+      }
       _ => i += 1,
     }
   }
   None
+}
+
+/// If `selector` is wrapped in `:global(...)`, return the inner selector.
+/// Otherwise return `None`.
+fn strip_global(selector: &str) -> Option<&str> {
+  let s = selector.trim();
+  if s.starts_with(":global(") && s.ends_with(')') {
+    Some(&s[":global(".len()..s.len() - 1])
+  } else {
+    None
+  }
 }

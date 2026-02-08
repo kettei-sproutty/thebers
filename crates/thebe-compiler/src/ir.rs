@@ -82,6 +82,8 @@ pub enum IrNode {
   Component(IrComponentRef),
   /// A `<slot>` element for composition.
   Slot(IrSlot),
+  /// A raw HTML injection `{@html expr}` — emitted without escaping.
+  RawHtml(IrExpr),
 }
 
 /// A lowered HTML element with directives split into typed fields.
@@ -123,6 +125,17 @@ pub struct IrComponentRef {
   pub events: Vec<IrEventHandler>,
   /// Two-way bindings on the component.
   pub bindings: Vec<IrBinding>,
+  /// Conditional CSS class toggles specified on this component tag.
+  ///
+  /// These are retained for validation purposes — `class:` directives
+  /// on a component have no effect (the component controls its own root
+  /// elements) and a warning is emitted.
+  pub class_toggles: Vec<IrClassToggle>,
+  /// Inline style properties specified on this component tag.
+  ///
+  /// Retained for validation — `style:` directives on a component have
+  /// no effect and a warning is emitted.
+  pub style_props: Vec<IrStyleProp>,
   /// Action hooks on the component.
   pub actions: Vec<IrAction>,
   /// Default slot children.

@@ -148,6 +148,16 @@ pub enum HtmlNode {
     /// Byte-offset span of the entire `<slot>...</slot>` or `<slot />`.
     span: Span,
   },
+  /// A raw HTML injection `{@html expr}`.
+  ///
+  /// The expression result is injected into the output **without**
+  /// HTML-escaping, so the caller is responsible for sanitisation.
+  RawHtml {
+    /// The expression that produces the raw HTML string.
+    expr: String,
+    /// Byte-offset span of the entire `{@html ...}` block.
+    span: Span,
+  },
 }
 
 /// An HTML-like element in the template tree.
@@ -287,6 +297,10 @@ pub enum ParseError {
   /// The span points to the `{#each ...}` tag.
   #[error("invalid {{#each}} expression at byte {}: {detail}", span.start)]
   InvalidEachExpression { detail: String, span: Span },
+  /// An `{@html}` block is missing its closing `}`.
+  /// The span points to the opening `{@html`.
+  #[error("unclosed {{@html}} block at byte {}", span.start)]
+  UnclosedRawHtml { span: Span },
   /// A `<slot>` element has an unsupported attribute or directive.
   /// Only the `name` attribute is allowed on `<slot>` elements.
   /// The span points to the offending attribute or directive.
@@ -309,6 +323,7 @@ impl ParseError {
       | ParseError::MalformedTag { span, .. }
       | ParseError::UnclosedIfBlock { span }
       | ParseError::UnclosedEachBlock { span }
+      | ParseError::UnclosedRawHtml { span }
       | ParseError::InvalidEachExpression { span, .. }
       | ParseError::InvalidSlotAttribute { span, .. } => Some(*span),
     }
