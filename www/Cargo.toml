@@ -7,6 +7,7 @@ version.workspace = true
 anyhow = "1.0.101"
 axum = { version = "0.8.8", features = ["http2"] }
 tokio = { version = "1.49.0", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
 
 [lints]
 workspace = true

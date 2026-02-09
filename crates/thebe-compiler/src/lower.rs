@@ -17,6 +17,7 @@ use crate::ir::IrAttribute;
 use crate::ir::IrBinding;
 use crate::ir::IrClassToggle;
 use crate::ir::IrComponentRef;
+use crate::ir::IrConst;
 use crate::ir::IrEach;
 use crate::ir::IrElement;
 use crate::ir::IrEventHandler;
@@ -47,13 +48,14 @@ pub fn lower(source: &str, ast: &ThebeAst) -> Result<CompiledComponent, CompileE
   let setup = ast.script_setup.as_ref().map(lower_setup);
   let client_script = ast.script.as_ref().map(lower_client_script);
   let styles = ast.styles.iter().map(lower_style).collect();
-  let template = lower_template(source, ast)?;
+  let (template, head) = lower_template(source, ast)?;
 
   Ok(CompiledComponent {
     setup,
     client_script,
     styles,
     template,
+    head,
   })
 }
 
@@ -107,9 +109,16 @@ fn generate_scope_id(content: &str) -> String {
 
 /// Extract template regions (gaps between script/style blocks) from the
 /// raw source, parse each into an HTML tree, and lower to IR nodes.
-fn lower_template(source: &str, ast: &ThebeAst) -> Result<Vec<IrNode>, CompileError> {
+///
+/// Returns `(body_nodes, head_nodes)` — any `<thebe:head>` children are
+/// split out into the head vector.
+fn lower_template(
+  source: &str,
+  ast: &ThebeAst,
+) -> Result<(Vec<IrNode>, Vec<IrNode>), CompileError> {
   let regions = extract_template_regions(source, ast);
-  let mut nodes = Vec::new();
+  let mut body = Vec::new();
+  let mut head = Vec::new();
 
   for (offset, text) in regions {
     let trimmed = text.trim();
@@ -119,11 +128,18 @@ fn lower_template(source: &str, ast: &ThebeAst) -> Result<Vec<IrNode>, CompileEr
     let trim_offset = offset + (text.len() - text.trim_start().len());
     let html_nodes = thebe_ast::parse_html(trimmed, trim_offset)?;
     for html_node in html_nodes {
-      nodes.push(lower_node(&html_node)?);
+      match &html_node {
+        HtmlNode::Head { children, .. } => {
+          for child in children {
+            head.push(lower_node(child)?);
+          }
+        }
+        _ => body.push(lower_node(&html_node)?),
+      }
     }
   }
 
-  Ok(nodes)
+  Ok((body, head))
 }
 
 /// Find the template-text gaps between script/style block spans.
@@ -191,6 +207,44 @@ fn lower_node(node: &HtmlNode) -> Result<IrNode, CompileError> {
       expr: expr.clone(),
       span: *span,
     })),
+    HtmlNode::Const { name, expr, span } => Ok(IrNode::Const(IrConst {
+      name: name.clone(),
+      expr: expr.clone(),
+      span: *span,
+    })),
+    HtmlNode::Debug { expr, span } => Ok(IrNode::Debug(IrExpr {
+      expr: expr.clone(),
+      span: *span,
+    })),
+    // `<thebe:head>` blocks are handled in `lower_template` and never
+    // reach `lower_node` directly. If one does, treat children as body
+    // nodes wrapped in an invisible container — but this path is
+    // unreachable in practice.
+    HtmlNode::Head { children, span } => {
+      let lowered = children
+        .iter()
+        .map(lower_node)
+        .collect::<Result<Vec<_>, _>>()?;
+      // Return the first child or empty text as fallback.
+      if lowered.len() == 1 {
+        Ok(lowered.into_iter().next().unwrap())
+      } else {
+        // Wrap multiple head children in a transparent div — though
+        // this branch should not be hit.
+        Ok(IrNode::Element(IrElement {
+          tag: String::new(),
+          attributes: vec![],
+          events: vec![],
+          bindings: vec![],
+          class_toggles: vec![],
+          style_props: vec![],
+          actions: vec![],
+          children: lowered,
+          self_closing: false,
+          span: *span,
+        }))
+      }
+    }
   }
 }
 

@@ -158,6 +158,36 @@ pub enum HtmlNode {
     /// Byte-offset span of the entire `{@html ...}` block.
     span: Span,
   },
+  /// A local constant binding `{@const name = expr}`.
+  ///
+  /// Introduces a `let` binding scoped to the current template block.
+  Const {
+    /// The variable name (e.g. `"total"`).
+    name: String,
+    /// The expression to bind (e.g. `"a + b"`).
+    expr: String,
+    /// Byte-offset span of the entire `{@const ...}` block.
+    span: Span,
+  },
+  /// A debug tag `{@debug expr}` — logs the expression at runtime.
+  ///
+  /// In SSR mode this emits an `eprintln!` call. The expression is
+  /// evaluated and printed but not rendered into the HTML output.
+  Debug {
+    /// The expression to log.
+    expr: String,
+    /// Byte-offset span of the entire `{@debug ...}` block.
+    span: Span,
+  },
+  /// A `<thebe:head>` block for per-page `<title>` and meta tags.
+  ///
+  /// Children are rendered into the document `<head>` instead of the body.
+  Head {
+    /// Child nodes (`<title>`, `<meta>`, `<link>`, etc.).
+    children: Vec<HtmlNode>,
+    /// Byte-offset span of the entire `<thebe:head>...</thebe:head>`.
+    span: Span,
+  },
 }
 
 /// An HTML-like element in the template tree.
@@ -301,6 +331,15 @@ pub enum ParseError {
   /// The span points to the opening `{@html`.
   #[error("unclosed {{@html}} block at byte {}", span.start)]
   UnclosedRawHtml { span: Span },
+  /// An `{@const}` block is missing its closing `}`.
+  #[error("unclosed {{@const}} block at byte {}", span.start)]
+  UnclosedConst { span: Span },
+  /// An `{@const}` block has an invalid expression (missing `=`).
+  #[error("invalid {{@const}} expression at byte {}: {detail}", span.start)]
+  InvalidConstExpression { detail: String, span: Span },
+  /// An `{@debug}` block is missing its closing `}`.
+  #[error("unclosed {{@debug}} block at byte {}", span.start)]
+  UnclosedDebug { span: Span },
   /// A `<slot>` element has an unsupported attribute or directive.
   /// Only the `name` attribute is allowed on `<slot>` elements.
   /// The span points to the offending attribute or directive.
@@ -324,6 +363,9 @@ impl ParseError {
       | ParseError::UnclosedIfBlock { span }
       | ParseError::UnclosedEachBlock { span }
       | ParseError::UnclosedRawHtml { span }
+      | ParseError::UnclosedConst { span }
+      | ParseError::UnclosedDebug { span }
+      | ParseError::InvalidConstExpression { span, .. }
       | ParseError::InvalidEachExpression { span, .. }
       | ParseError::InvalidSlotAttribute { span, .. } => Some(*span),
     }

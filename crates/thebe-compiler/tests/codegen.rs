@@ -786,3 +786,102 @@ fn raw_html_in_if_block() {
   assert!(code.contains("if show {"));
   assert!(code.contains("__html.push_str(&format!(\"{}\", { content }));"));
 }
+
+// ── {@const} local constant bindings ────────────────────────────────────
+
+#[test]
+fn const_emits_let_binding() {
+  let code = codegen("<div>{@const x = 42}</div>");
+  assert!(code.contains("let x = { 42 };"));
+}
+
+#[test]
+fn const_complex_expression() {
+  let code = codegen("<div>{@const total = a + b}</div>");
+  assert!(code.contains("let total = { a + b };"));
+}
+
+#[test]
+fn const_used_in_expression() {
+  let code = codegen("<div>{@const x = 1}{{ x }}</div>");
+  assert!(code.contains("let x = { 1 };"));
+  assert!(code.contains("__esc(&format!(\"{}\", { x }))"));
+}
+
+#[test]
+fn const_in_each_block() {
+  let code = codegen("{#each items as item}{@const doubled = item * 2}{{ doubled }}{/each}");
+  assert!(code.contains("let doubled = { item * 2 };"));
+}
+
+// ── {@debug} runtime debugging ──────────────────────────────────────────
+
+#[test]
+fn debug_emits_eprintln() {
+  let code = codegen("<div>{@debug x}</div>");
+  assert!(code.contains("eprintln!"));
+  assert!(code.contains("x"));
+}
+
+#[test]
+fn debug_no_expr_emits_marker() {
+  let code = codegen("<div>{@debug}</div>");
+  assert!(code.contains("eprintln!(\"[thebe:debug]\");"));
+}
+
+#[test]
+fn debug_in_if_block() {
+  let code = codegen("{#if show}{@debug val}{/if}");
+  assert!(code.contains("if show {"));
+  assert!(code.contains("eprintln!"));
+}
+
+// ── <thebe:head> per-page head content ──────────────────────────────────
+
+#[test]
+fn head_fn_empty_when_no_thebe_head() {
+  let code = codegen("<div>hello</div>");
+  // Should still have a head() function that returns empty string.
+  assert!(code.contains("pub fn head()"));
+  assert!(code.contains("String::new()"));
+}
+
+#[test]
+fn head_fn_with_title() {
+  let code = codegen("<thebe:head><title>My Page</title></thebe:head><div>body</div>");
+  assert!(code.contains("pub fn head()"));
+  // head() should render the <title> tag.
+  assert!(code.contains(r#"__html.push_str("<title");"#));
+  assert!(code.contains(r#"__html.push_str("My Page");"#));
+  assert!(code.contains(r#"__html.push_str("</title>");"#));
+}
+
+#[test]
+fn head_fn_with_meta() {
+  let code = codegen(
+    r#"<thebe:head><meta name="description" content="A page" /></thebe:head><p>hi</p>"#,
+  );
+  assert!(code.contains("pub fn head()"));
+  assert!(code.contains(r#"__html.push_str("<meta");"#));
+}
+
+#[test]
+fn head_fn_with_dynamic_title() {
+  let code = codegen(
+    r#"<script setup>let title = "Hello";</script>
+<thebe:head><title>{{ title }}</title></thebe:head>
+<div>body</div>"#,
+  );
+  assert!(code.contains("pub fn head()"));
+  // head() should include the setup block so expressions work.
+  assert!(code.contains("let title"));
+}
+
+#[test]
+fn head_fn_with_route_params() {
+  let code = codegen_with_params(
+    "<thebe:head><title>{{ slug }}</title></thebe:head><div>{{ slug }}</div>",
+    &["slug"],
+  );
+  assert!(code.contains("pub fn head(slug: &str)"));
+}

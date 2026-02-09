@@ -16,6 +16,7 @@ pub use ir::IrAttribute;
 pub use ir::IrBinding;
 pub use ir::IrClassToggle;
 pub use ir::IrComponentRef;
+pub use ir::IrConst;
 pub use ir::IrEach;
 pub use ir::IrElement;
 pub use ir::IrEventHandler;
