@@ -560,10 +560,10 @@ fn emit_root_mod(
 
   // Serve static files from public/ directory.
   if let Some(pub_path) = public_dir {
-    let pub_str = pub_path.display();
+    let pub_str = pub_path.to_string_lossy();
     writeln!(
       code,
-      "    .nest_service(\"/public\", tower_http::services::ServeDir::new(\"{pub_str}\"))",
+      "    .nest_service(\"/public\", tower_http::services::ServeDir::new({pub_str:?}))",
     )
     .expect("write to String");
   }

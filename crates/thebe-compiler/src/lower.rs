@@ -216,34 +216,13 @@ fn lower_node(node: &HtmlNode) -> Result<IrNode, CompileError> {
       expr: expr.clone(),
       span: *span,
     })),
-    // `<thebe:head>` blocks are handled in `lower_template` and never
-    // reach `lower_node` directly. If one does, treat children as body
-    // nodes wrapped in an invisible container — but this path is
-    // unreachable in practice.
-    HtmlNode::Head { children, span } => {
-      let lowered = children
-        .iter()
-        .map(lower_node)
-        .collect::<Result<Vec<_>, _>>()?;
-      // Return the first child or empty text as fallback.
-      if lowered.len() == 1 {
-        Ok(lowered.into_iter().next().unwrap())
-      } else {
-        // Wrap multiple head children in a transparent div — though
-        // this branch should not be hit.
-        Ok(IrNode::Element(IrElement {
-          tag: String::new(),
-          attributes: vec![],
-          events: vec![],
-          bindings: vec![],
-          class_toggles: vec![],
-          style_props: vec![],
-          actions: vec![],
-          children: lowered,
-          self_closing: false,
-          span: *span,
-        }))
-      }
+    // `<thebe:head>` blocks are handled in `lower_template` and should
+    // never reach `lower_node` directly. If one does, it means the parser
+    // allowed a nested head block that wasn't caught. Treat this as an error.
+    HtmlNode::Head { span, .. } => {
+      Err(CompileError::Parse(thebe_ast::ParseError::NestedHead {
+        span: *span,
+      }))
     }
   }
 }
