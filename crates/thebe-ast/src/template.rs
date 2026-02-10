@@ -166,11 +166,34 @@ impl<'a> HtmlParser<'a> {
         continue;
       }
 
+      // Local const binding: {@const name = expr}.
+      if remaining.starts_with("{@const ") {
+        let node = self.parse_const()?;
+        nodes.push(node);
+        continue;
+      }
+
+      // Debug tag: {@debug expr}.
+      if remaining.starts_with("{@debug ") || remaining.starts_with("{@debug}") {
+        let node = self.parse_debug()?;
+        nodes.push(node);
+        continue;
+      }
+
       // Check for opening tag.
       if remaining.starts_with('<') && !remaining.starts_with("</") {
         let element = self.parse_element()?;
         if element.tag == "slot" {
           nodes.push(Self::element_to_slot(element)?);
+        } else if element.tag == "thebe:head" {
+          // Reject nested <thebe:head> elements.
+          if parent.is_some() {
+            return Err(ParseError::NestedHead { span: element.span });
+          }
+          nodes.push(HtmlNode::Head {
+            children: element.children,
+            span: element.span,
+          });
         } else if element.tag.starts_with(char::is_uppercase) {
           nodes.push(HtmlNode::Component(element));
         } else {
@@ -236,6 +259,53 @@ impl<'a> HtmlParser<'a> {
 
     self.pos = end;
     Ok(HtmlNode::RawHtml { expr, span })
+  }
+
+  /// Parse a `{@const name = expr}` local binding node.
+  fn parse_const(&mut self) -> Result<HtmlNode, ParseError> {
+    let start = self.abs_pos();
+    let prefix_len = "{@const ".len();
+    self.pos += prefix_len;
+
+    let rest = self.remaining();
+    let close = rest.find('}').ok_or_else(|| ParseError::UnclosedConst {
+      span: Span::new(start, start + prefix_len),
+    })?;
+
+    let content = rest[..close].trim();
+    let (name, expr) = content
+      .split_once('=')
+      .ok_or_else(|| ParseError::InvalidConstExpression {
+        detail: format!("expected `name = expr`, got `{content}`"),
+        span: Span::new(start, self.base_offset + self.pos + close + 1),
+      })?;
+
+    let name = name.trim().to_string();
+    let expr = expr.trim().to_string();
+    let end = self.pos + close + 1;
+    let span = Span::new(start, self.base_offset + end);
+
+    self.pos = end;
+    Ok(HtmlNode::Const { name, expr, span })
+  }
+
+  /// Parse a `{@debug expr}` debug logging node.
+  fn parse_debug(&mut self) -> Result<HtmlNode, ParseError> {
+    let start = self.abs_pos();
+    let prefix_len = "{@debug".len();
+    self.pos += prefix_len;
+
+    let rest = self.remaining();
+    let close = rest.find('}').ok_or_else(|| ParseError::UnclosedDebug {
+      span: Span::new(start, start + prefix_len),
+    })?;
+
+    let expr = rest[..close].trim().to_string();
+    let end = self.pos + close + 1;
+    let span = Span::new(start, self.base_offset + end);
+
+    self.pos = end;
+    Ok(HtmlNode::Debug { expr, span })
   }
 
   /// Parse plain text until the next special sequence.
@@ -654,7 +724,7 @@ fn is_valid_tag_name(name: &str) -> bool {
     Some(c) if c.is_ascii_alphabetic() => {}
     _ => return false,
   }
-  chars.all(|c| c.is_ascii_alphanumeric() || c == '-')
+  chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
 }
 
 /// Check that an attribute name contains only valid characters.

@@ -128,6 +128,8 @@ impl Emitter {
     self.line("");
     self.emit_render(c, route_params);
     self.line("");
+    self.emit_head(c, route_params);
+    self.line("");
     self.emit_style_constants(c)?;
     self.line("");
     self.emit_esc();
@@ -175,6 +177,42 @@ impl Emitter {
     }
     self.indent();
     self.emit_render_body(c, true);
+    self.dedent();
+    self.line("}");
+  }
+
+  /// Emit a `head()` function that returns extra `<head>` content.
+  fn emit_head(&mut self, c: &CompiledComponent, route_params: &[String]) {
+    self.line("/// Return extra `<head>` content (title, meta tags, etc.).");
+    self.line("#[allow(clippy::all, unused)]");
+    if route_params.is_empty() {
+      self.line("pub fn head() -> String {");
+    } else {
+      let params: String = route_params
+        .iter()
+        .map(|p| format!("{p}: &str"))
+        .collect::<Vec<_>>()
+        .join(", ");
+      self.line(&format!("pub fn head({params}) -> String {{"));
+    }
+    self.indent();
+
+    if c.head.is_empty() {
+      self.line("String::new()");
+    } else {
+      // Execute setup block if present (head expressions may reference it).
+      if let Some(setup) = &c.setup {
+        for l in setup.content.lines() {
+          self.line(l);
+        }
+        self.line("");
+      }
+      self.line("let mut __html = String::new();");
+      for node in &c.head {
+        self.emit_node(node);
+      }
+      self.line("__html");
+    }
     self.dedent();
     self.line("}");
   }
@@ -239,6 +277,21 @@ impl Emitter {
           "__html.push_str(&format!(\"{{}}\", {{ {} }}));",
           e.expr
         ));
+      }
+      IrNode::Const(c) => {
+        // Emit a local let-binding.
+        self.line(&format!("let {} = {{ {} }};", c.name, c.expr));
+      }
+      IrNode::Debug(e) => {
+        // Emit an eprintln! for runtime debugging.
+        if e.expr.is_empty() {
+          self.line("eprintln!(\"[thebe:debug]\");");
+        } else {
+          self.line(&format!(
+            "eprintln!(\"[thebe:debug] {{}} = {{:?}}\", stringify!({{ {} }}), {{ {} }});",
+            e.expr, e.expr
+          ));
+        }
       }
     }
   }
@@ -833,7 +886,7 @@ fn collect_named_slots_inner(nodes: &[IrNode], out: &mut Vec<String>) {
       IrNode::Each(each) => {
         collect_named_slots_inner(&each.children, out);
       }
-      IrNode::Text(_) | IrNode::Expr(_) | IrNode::RawHtml(_) => {}
+      IrNode::Text(_) | IrNode::Expr(_) | IrNode::RawHtml(_) | IrNode::Const(_) | IrNode::Debug(_) => {}
     }
   }
 }

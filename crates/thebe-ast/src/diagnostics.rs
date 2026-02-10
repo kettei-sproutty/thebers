@@ -36,6 +36,7 @@ struct DiagInfo {
 }
 
 /// Extract the diagnostic metadata from a [`ParseError`].
+#[allow(clippy::too_many_lines)]
 fn diag_info(error: &ParseError) -> DiagInfo {
   match error {
     ParseError::EmptyInput => DiagInfo {
@@ -129,6 +130,34 @@ fn diag_info(error: &ParseError) -> DiagInfo {
       message: "unsupported attribute on <slot>",
       label: detail.clone(),
       note: Some("only the 'name' attribute is allowed on <slot> elements"),
+      help: None,
+    },
+    ParseError::UnclosedConst { span } => DiagInfo {
+      range: span.start..span.end,
+      message: "unclosed {@const} block",
+      label: "{@const opened here has no matching }".into(),
+      note: None,
+      help: Some("add a closing } brace"),
+    },
+    ParseError::InvalidConstExpression { detail, span } => DiagInfo {
+      range: span.start..span.end,
+      message: "invalid {@const} expression",
+      label: format!("could not parse: {detail}"),
+      note: None,
+      help: Some("expected {@const name = expression}"),
+    },
+    ParseError::UnclosedDebug { span } => DiagInfo {
+      range: span.start..span.end,
+      message: "unclosed {@debug} block",
+      label: "{@debug opened here has no matching }".into(),
+      note: None,
+      help: Some("add a closing } brace"),
+    },
+    ParseError::NestedHead { span } => DiagInfo {
+      range: span.start..span.end,
+      message: "<thebe:head> cannot be nested inside other elements",
+      label: "nested <thebe:head> found here".into(),
+      note: Some("<thebe:head> blocks must be top-level, not nested inside other HTML elements"),
       help: None,
     },
   }

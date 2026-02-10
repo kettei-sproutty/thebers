@@ -27,6 +27,7 @@ use crate::warning::ValidationWarning;
 pub fn validate(component: &CompiledComponent) -> Vec<ValidationWarning> {
   let mut ctx = ValidationCtx::default();
   ctx.validate_nodes(&component.template);
+  ctx.validate_nodes(&component.head);
   ctx.warnings
 }
 
@@ -54,7 +55,13 @@ impl ValidationCtx {
     match node {
       IrNode::Element(el) => self.validate_element(el),
       IrNode::Component(comp) => self.validate_component(comp),
-      IrNode::Expr(e) | IrNode::RawHtml(e) => self.check_empty_expr(&e.expr, e.span),
+      IrNode::Expr(e) | IrNode::RawHtml(e) | IrNode::Debug(e) => {
+        self.check_empty_expr(&e.expr, e.span);
+      }
+      IrNode::Const(c) => {
+        self.check_empty_expr(&c.name, c.span);
+        self.check_empty_expr(&c.expr, c.span);
+      }
       IrNode::If(ib) => {
         for branch in &ib.branches {
           self.validate_nodes(&branch.children);

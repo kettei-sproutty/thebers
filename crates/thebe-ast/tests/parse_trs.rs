@@ -1727,3 +1727,176 @@ fn raw_html_alongside_text_and_expr() {
   assert!(matches!(&nodes[0], HtmlNode::Text(t) if t == "hello "));
   assert!(matches!(&nodes[1], HtmlNode::RawHtml { expr, .. } if expr == "mid"));
 }
+
+// ── {@const} local constant bindings ────────────────────────────────────
+
+#[test]
+fn const_parsed() {
+  let nodes = thebe_ast::parse_html("{@const x = 42}", 0).unwrap();
+  assert_eq!(nodes.len(), 1);
+  let HtmlNode::Const { name, expr, .. } = &nodes[0] else {
+    panic!("expected Const, got {:?}", nodes[0]);
+  };
+  assert_eq!(name, "x");
+  assert_eq!(expr, "42");
+}
+
+#[test]
+fn const_trims_whitespace() {
+  let nodes = thebe_ast::parse_html("{@const   name  =  value  }", 0).unwrap();
+  let HtmlNode::Const { name, expr, .. } = &nodes[0] else {
+    panic!("expected Const");
+  };
+  assert_eq!(name, "name");
+  assert_eq!(expr, "value");
+}
+
+#[test]
+fn const_complex_expression() {
+  let nodes = thebe_ast::parse_html("{@const total = a + b * 2}", 0).unwrap();
+  let HtmlNode::Const { name, expr, .. } = &nodes[0] else {
+    panic!("expected Const");
+  };
+  assert_eq!(name, "total");
+  assert_eq!(expr, "a + b * 2");
+}
+
+#[test]
+fn const_inside_element() {
+  let nodes = thebe_ast::parse_html("<div>{@const x = 1}</div>", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else { panic!("expected Element") };
+  assert_eq!(el.children.len(), 1);
+  assert!(matches!(&el.children[0], HtmlNode::Const { name, expr, .. } if name == "x" && expr == "1"));
+}
+
+#[test]
+fn const_unclosed_is_error() {
+  let result = thebe_ast::parse_html("{@const x = 42", 0);
+  assert!(matches!(result, Err(ParseError::UnclosedConst { .. })));
+}
+
+#[test]
+fn const_missing_equals_is_error() {
+  let result = thebe_ast::parse_html("{@const x}", 0);
+  assert!(matches!(
+    result,
+    Err(ParseError::InvalidConstExpression { .. })
+  ));
+}
+
+#[test]
+fn const_span_covers_full_block() {
+  let nodes = thebe_ast::parse_html("{@const y = 0}", 0).unwrap();
+  let HtmlNode::Const { span, .. } = &nodes[0] else { panic!("expected Const") };
+  assert_eq!(span.start, 0);
+  assert_eq!(span.end, "{@const y = 0}".len());
+}
+
+// ── {@debug} runtime debugging ──────────────────────────────────────────
+
+#[test]
+fn debug_parsed() {
+  let nodes = thebe_ast::parse_html("{@debug x}", 0).unwrap();
+  assert_eq!(nodes.len(), 1);
+  let HtmlNode::Debug { expr, .. } = &nodes[0] else {
+    panic!("expected Debug, got {:?}", nodes[0]);
+  };
+  assert_eq!(expr, "x");
+}
+
+#[test]
+fn debug_no_expr() {
+  let nodes = thebe_ast::parse_html("{@debug}", 0).unwrap();
+  assert_eq!(nodes.len(), 1);
+  let HtmlNode::Debug { expr, .. } = &nodes[0] else {
+    panic!("expected Debug");
+  };
+  assert_eq!(expr, "");
+}
+
+#[test]
+fn debug_trims_whitespace() {
+  let nodes = thebe_ast::parse_html("{@debug   some_var  }", 0).unwrap();
+  let HtmlNode::Debug { expr, .. } = &nodes[0] else {
+    panic!("expected Debug");
+  };
+  assert_eq!(expr, "some_var");
+}
+
+#[test]
+fn debug_inside_element() {
+  let nodes = thebe_ast::parse_html("<div>{@debug val}</div>", 0).unwrap();
+  let HtmlNode::Element(el) = &nodes[0] else { panic!("expected Element") };
+  assert_eq!(el.children.len(), 1);
+  assert!(matches!(&el.children[0], HtmlNode::Debug { expr, .. } if expr == "val"));
+}
+
+#[test]
+fn debug_unclosed_is_error() {
+  let result = thebe_ast::parse_html("{@debug oops", 0);
+  assert!(matches!(result, Err(ParseError::UnclosedDebug { .. })));
+}
+
+#[test]
+fn debug_span_covers_full_block() {
+  let nodes = thebe_ast::parse_html("{@debug z}", 0).unwrap();
+  let HtmlNode::Debug { span, .. } = &nodes[0] else { panic!("expected Debug") };
+  assert_eq!(span.start, 0);
+  assert_eq!(span.end, "{@debug z}".len());
+}
+
+// ── <thebe:head> per-page head content ──────────────────────────────────
+
+#[test]
+fn thebe_head_parsed() {
+  let nodes = thebe_ast::parse_html("<thebe:head><title>Hello</title></thebe:head>", 0).unwrap();
+  assert_eq!(nodes.len(), 1);
+  let HtmlNode::Head { children, .. } = &nodes[0] else {
+    panic!("expected Head, got {:?}", nodes[0]);
+  };
+  assert_eq!(children.len(), 1);
+  let HtmlNode::Element(el) = &children[0] else { panic!("expected Element") };
+  assert_eq!(el.tag, "title");
+}
+
+#[test]
+fn thebe_head_with_meta() {
+  let nodes = thebe_ast::parse_html(
+    r#"<thebe:head><meta name="description" content="A page" /></thebe:head>"#,
+    0,
+  )
+  .unwrap();
+  let HtmlNode::Head { children, .. } = &nodes[0] else { panic!("expected Head") };
+  assert_eq!(children.len(), 1);
+  let HtmlNode::Element(el) = &children[0] else { panic!("expected Element") };
+  assert_eq!(el.tag, "meta");
+}
+
+#[test]
+fn thebe_head_multiple_children() {
+  let nodes = thebe_ast::parse_html(
+    "<thebe:head><title>Hi</title><meta name=\"x\" content=\"y\" /></thebe:head>",
+    0,
+  )
+  .unwrap();
+  let HtmlNode::Head { children, .. } = &nodes[0] else { panic!("expected Head") };
+  assert_eq!(children.len(), 2);
+}
+
+#[test]
+fn thebe_head_alongside_body() {
+  let nodes =
+    thebe_ast::parse_html("<thebe:head><title>T</title></thebe:head><div>body</div>", 0).unwrap();
+  assert_eq!(nodes.len(), 2);
+  assert!(matches!(&nodes[0], HtmlNode::Head { .. }));
+  assert!(matches!(&nodes[1], HtmlNode::Element(_)));
+}
+
+#[test]
+fn thebe_head_span_covers_full_block() {
+  let input = "<thebe:head><title>T</title></thebe:head>";
+  let nodes = thebe_ast::parse_html(input, 0).unwrap();
+  let HtmlNode::Head { span, .. } = &nodes[0] else { panic!("expected Head") };
+  assert_eq!(span.start, 0);
+  assert_eq!(span.end, input.len());
+}

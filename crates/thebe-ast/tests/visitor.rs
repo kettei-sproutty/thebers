@@ -97,6 +97,7 @@ impl Visitor for NodeCounter {
       HtmlNode::Each { .. } => self.eachs += 1,
       HtmlNode::Slot { .. } => self.slots += 1,
       HtmlNode::RawHtml { .. } => self.exprs += 1,
+      HtmlNode::Const { .. } | HtmlNode::Debug { .. } | HtmlNode::Head { .. } => {}
     }
     walk_html_node(self, node);
   }

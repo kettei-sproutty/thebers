@@ -20,6 +20,8 @@ pub struct CompiledComponent {
   pub styles: Vec<ProcessedStyle>,
   /// Template IR nodes in source order (the HTML tree, lowered).
   pub template: Vec<IrNode>,
+  /// Nodes from `<thebe:head>` blocks — rendered into `<head>` instead of `<body>`.
+  pub head: Vec<IrNode>,
 }
 
 /// The `<script setup>` block content.
@@ -84,6 +86,10 @@ pub enum IrNode {
   Slot(IrSlot),
   /// A raw HTML injection `{@html expr}` — emitted without escaping.
   RawHtml(IrExpr),
+  /// A local constant binding `{@const name = expr}` — emits a `let` statement.
+  Const(IrConst),
+  /// A debug tag `{@debug expr}` — emits `eprintln!` at runtime.
+  Debug(IrExpr),
 }
 
 /// A lowered HTML element with directives split into typed fields.
@@ -163,6 +169,17 @@ pub struct IrExpr {
   /// The trimmed expression text.
   pub expr: String,
   /// Byte-offset span of the `{{ ... }}`.
+  pub span: Span,
+}
+
+/// A local constant binding from `{@const name = expr}`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrConst {
+  /// The variable name.
+  pub name: String,
+  /// The initializer expression.
+  pub expr: String,
+  /// Byte-offset span.
   pub span: Span,
 }
 

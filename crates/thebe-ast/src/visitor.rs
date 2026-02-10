@@ -119,13 +119,15 @@ pub fn walk_template_fragment<V: Visitor + ?Sized>(v: &mut V, frag: &TemplateFra
 pub fn walk_html_node<V: Visitor + ?Sized>(v: &mut V, node: &HtmlNode) {
   match node {
     HtmlNode::Element(el) | HtmlNode::Component(el) => v.visit_element(el),
-    HtmlNode::Text(_) | HtmlNode::Expr { .. } | HtmlNode::RawHtml { .. } => {}
+    HtmlNode::Text(_) | HtmlNode::Expr { .. } | HtmlNode::RawHtml { .. }
+    | HtmlNode::Const { .. } | HtmlNode::Debug { .. } => {}
     HtmlNode::If { branches, .. } => {
       for branch in branches {
         v.visit_if_branch(branch);
       }
     }
-    HtmlNode::Each { children, .. } | HtmlNode::Slot { children, .. } => {
+    HtmlNode::Each { children, .. } | HtmlNode::Slot { children, .. }
+    | HtmlNode::Head { children, .. } => {
       for child in children {
         v.visit_html_node(child);
       }
