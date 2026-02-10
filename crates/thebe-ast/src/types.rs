@@ -345,6 +345,10 @@ pub enum ParseError {
   /// The span points to the offending attribute or directive.
   #[error("unsupported attribute on <slot> at byte {}: {detail}", span.start)]
   InvalidSlotAttribute { detail: String, span: Span },
+  /// A `<thebe:head>` element appears nested inside another element.
+  /// The span points to the nested `<thebe:head>` tag.
+  #[error("<thebe:head> cannot be nested inside other elements at byte {}", span.start)]
+  NestedHead { span: Span },
 }
 
 impl ParseError {
@@ -367,7 +371,8 @@ impl ParseError {
       | ParseError::UnclosedDebug { span }
       | ParseError::InvalidConstExpression { span, .. }
       | ParseError::InvalidEachExpression { span, .. }
-      | ParseError::InvalidSlotAttribute { span, .. } => Some(*span),
+      | ParseError::InvalidSlotAttribute { span, .. }
+      | ParseError::NestedHead { span } => Some(*span),
     }
   }
 }

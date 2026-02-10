@@ -288,7 +288,7 @@ impl Emitter {
           self.line("eprintln!(\"[thebe:debug]\");");
         } else {
           self.line(&format!(
-            "eprintln!(\"[thebe:debug] {{}} = {{:?}}\", \"{}\", {{ {} }});",
+            "eprintln!(\"[thebe:debug] {{}} = {{:?}}\", stringify!({{ {} }}), {{ {} }});",
             e.expr, e.expr
           ));
         }

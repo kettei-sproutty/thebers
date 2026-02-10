@@ -153,6 +153,13 @@ fn diag_info(error: &ParseError) -> DiagInfo {
       note: None,
       help: Some("add a closing } brace"),
     },
+    ParseError::NestedHead { span } => DiagInfo {
+      range: span.start..span.end,
+      message: "<thebe:head> cannot be nested inside other elements",
+      label: "nested <thebe:head> found here".into(),
+      note: Some("<thebe:head> blocks must be top-level, not nested inside other HTML elements"),
+      help: None,
+    },
   }
 }
 

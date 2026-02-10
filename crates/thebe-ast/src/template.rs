@@ -186,6 +186,10 @@ impl<'a> HtmlParser<'a> {
         if element.tag == "slot" {
           nodes.push(Self::element_to_slot(element)?);
         } else if element.tag == "thebe:head" {
+          // Reject nested <thebe:head> elements.
+          if parent.is_some() {
+            return Err(ParseError::NestedHead { span: element.span });
+          }
           nodes.push(HtmlNode::Head {
             children: element.children,
             span: element.span,
